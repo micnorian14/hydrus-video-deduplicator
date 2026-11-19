@@ -63,6 +63,7 @@ class DedupeParameters:
     debug: bool
     similarity_threshold: float
     skip_hashing: bool
+    gpu_decode: bool = False
 
 
 @dataclass
@@ -123,6 +124,7 @@ class Worker(QObject):
                 custom_query=dedupe_params.custom_query,
                 update_progress_callback=self.update_progress,
                 should_skip_step_fn=self.should_skip_step,
+                gpu_decode=dedupe_params.gpu_decode,
             )
 
             if dedupe_params.debug:
@@ -932,6 +934,7 @@ If you change this value you should clear the search cache. This isn't cleared a
             debug=False,  # TODO: Expose to GUI?
             similarity_threshold=similarity_threshold,
             skip_hashing=False,
+            gpu_decode=bool(self.config.gpu_decode),
         )
 
 

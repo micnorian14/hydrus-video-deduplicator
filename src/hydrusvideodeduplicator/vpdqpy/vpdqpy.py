@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import av
+from av.codec.hwaccel import HWAccel
 from hvdaccelerators import vpdq
 
 if TYPE_CHECKING:
@@ -54,9 +55,18 @@ class Vpdq:
         return vpdq.matchHash(query_features, target_features, int(distance_tolerance))
 
     @staticmethod
-    def frame_extract_pyav(video_bytes: bytes) -> Iterator[av.VideoFrame]:
-        """Extract frames from video"""
-        with av.open(io.BytesIO(video_bytes)) as container:
+    def frame_extract_pyav(video_bytes: bytes, gpu_decode: bool = False) -> Iterator[av.VideoFrame]:
+        """Extract frames from video
+
+        If gpu_decode is True, decoding uses the NVIDIA hardware decoder (CUDA/NVDEC). Decoded frames are
+        identical to CPU decoding, so the resulting perceptual hashes are identical too.
+        """
+        open_kwargs = {}
+        if gpu_decode:
+            # is_hw_owned keeps decoded frames in GPU memory, so only the frames we keep (one per second)
+            # are copied back to the CPU by reformat() below, instead of every decoded frame.
+            open_kwargs["hwaccel"] = HWAccel(device_type="cuda", allow_software_fallback=True, is_hw_owned=True)
+        with av.open(io.BytesIO(video_bytes), **open_kwargs) as container:
             # Check for video in video container
             video_streams = container.streams.video
             if video_streams is None or len(video_streams) < 1:
@@ -64,7 +74,8 @@ class Vpdq:
                 raise ValueError("Video stream not found.")
 
             video = container.streams.video[0]
-            video.thread_type = "AUTO"
+            if not gpu_decode:
+                video.thread_type = "AUTO"
 
             average_fps: int = 1
             # Some videos, like small GIFs, will have a NoneType FPS
@@ -98,17 +109,27 @@ class Vpdq:
                     frame_index += 1
 
     @staticmethod
-    def computeHash(video_file: Path | str | bytes, num_threads: int = 0) -> VpdqHash:
+    def computeHash(video_file: Path | str | bytes, num_threads: int = 0, gpu_decode: bool = False) -> VpdqHash:
         """Perceptually hash video from a file path or the bytes"""
         video = Vpdq.get_video_bytes(video_file)
         if video is None:
             raise ValueError
 
+        if gpu_decode:
+            try:
+                return Vpdq._hash_video_bytes(video, num_threads, gpu_decode=True)
+            except Exception as exc:
+                # Anything the GPU can't handle is retried with normal CPU decoding.
+                log.warning(f"GPU decode failed, falling back to CPU decode: {exc}")
+        return Vpdq._hash_video_bytes(video, num_threads, gpu_decode=False)
+
+    @staticmethod
+    def _hash_video_bytes(video: bytes, num_threads: int, gpu_decode: bool) -> VpdqHash:
         # Average FPS is used by vpdq to calculate the timestamp, but we completely discard
         # the timestamp so this value doesn't matter.
         average_fps = 1
         hasher = vpdq.VideoHasher(average_fps, DOWNSCALE_DIMENSIONS, DOWNSCALE_DIMENSIONS, num_threads)
-        for frame in Vpdq.frame_extract_pyav(video):
+        for frame in Vpdq.frame_extract_pyav(video, gpu_decode=gpu_decode):
             # Note: hash_frame will block if vpdq's internal frame queue is full. This is necessary,
             # otherwise if hashing gets too far behind decoding there will be an insane amount of memory
             # used to hold the raw frames.

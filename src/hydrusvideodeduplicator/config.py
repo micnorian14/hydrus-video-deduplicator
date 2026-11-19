@@ -47,6 +47,7 @@ class Config:
         self.similarity_threshold = None
         self.job_count = None
         self.hvd_gui = None
+        self.gpu_decode = False
 
     @staticmethod
     def _load(config_map: dict[str, str | None]):
@@ -97,6 +98,9 @@ class Config:
 
         config.hvd_gui = config_map.get("HVD_GUI", False)
 
+        # Use the NVIDIA GPU (CUDA/NVDEC) to decode videos. Hashes are identical to CPU decoding.
+        config.gpu_decode = str(config_map.get("GPU_DECODE", "0")).strip().lower() in ("1", "true", "yes", "on")
+
         return config
 
     @staticmethod
@@ -114,6 +118,7 @@ class Config:
             "SIMILARITY_THRESHOLD",
             "JOB_COUNT",
             "HVD_GUI",
+            "GPU_DECODE",
         ]
         for option in config_options:
             config_map[option] = os.getenv(option)

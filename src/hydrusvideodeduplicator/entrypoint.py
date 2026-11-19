@@ -77,6 +77,10 @@ def main(
         Optional[int],
         typer.Option(help="Number of CPU threads to use for perceptual hashing. Default is all but one core."),
     ] = config.job_count,
+    gpu_decode: Annotated[
+        Optional[bool],
+        typer.Option(help="Decode videos on an NVIDIA GPU (CUDA). Falls back to CPU if a video can't be GPU decoded."),
+    ] = config.gpu_decode,
     dedup_database_dir: Annotated[
         Optional[Path], typer.Option(help="The directory to store the database used for dedupe.")
     ] = config.dedupe_database_dir,
@@ -226,6 +230,7 @@ def main(
         job_count=job_count,
         failed_page_name=failed_page_name,
         custom_query=query,
+        gpu_decode=bool(gpu_decode),
     )
 
     if debug:

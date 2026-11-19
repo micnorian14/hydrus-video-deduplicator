@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     FileHash = str
 
 import gc
+from concurrent.futures import ThreadPoolExecutor
 
 import hydrusvideodeduplicator.hydrus_api as hydrus_api
 
@@ -58,9 +59,10 @@ class FileHasher:
     A class to fetch a file from Hydrus and phash it.
     """
 
-    def __init__(self, client: HVDClient, num_threads: int = 0):
+    def __init__(self, client: HVDClient, num_threads: int = 0, gpu_decode: bool = False):
         self.client = client
         self.num_threads = num_threads
+        self.gpu_decode = gpu_decode
 
     def _fetch_file(self, file_hash: str):
         try:
@@ -71,7 +73,7 @@ class FileHasher:
 
     def _phash_file(self, file: bytes) -> bytes:
         try:
-            phash = compute_phash(file, self.num_threads)
+            phash = compute_phash(file, self.num_threads, self.gpu_decode)
             phash_bytes: bytes = phash.bytes
         except Exception as exc:
             raise FailedPerceptualHashException(str(exc))
@@ -83,28 +85,43 @@ class FileHasher:
 
         return phash_bytes
 
-    def fetch_and_phash_file(self, file_hash: str) -> PerceptuallyHashedFile | FailedPerceptuallyHashedFile:
+    def fetch_file_or_error(self, file_hash: str) -> bytes | HydrusApiException:
         """
-        Retrieves the file from Hydrus and calculates its perceptual hash and returns the result.
+        Retrieves the file from Hydrus. Returns the file bytes, or the HydrusApiException if it failed.
 
-        Returns FailedPerceptuallyHashedFile with the failed video hash if there are any errors.
+        Safe to run in a background thread so the next file downloads while the current one is hashed.
         """
         try:
-            file = self._fetch_file(file_hash)
+            return self._fetch_file(file_hash)
         except HydrusApiException as exc:
             # Add a delay before turning so that if there is some transient issue
             # the next file to be hashed won't also immediately error.
             # This is a hack. There should probably be some counter in the result generator
             # for the number of failures before hashing is stopped entirely.
             time.sleep(3)
-            return FailedPerceptuallyHashedFile(file_hash, exc)
+            return exc
+
+    def phash_fetched_file(
+        self, file_hash: str, file_or_error: bytes | HydrusApiException
+    ) -> PerceptuallyHashedFile | FailedPerceptuallyHashedFile:
+        """Calculates the perceptual hash of an already fetched file and returns the result."""
+        if isinstance(file_or_error, HydrusApiException):
+            return FailedPerceptuallyHashedFile(file_hash, file_or_error)
 
         try:
-            phash = self._phash_file(file)
+            phash = self._phash_file(file_or_error)
         except FailedPerceptualHashException as exc:
             return FailedPerceptuallyHashedFile(file_hash, exc)
 
         return PerceptuallyHashedFile(file_hash, phash)
+
+    def fetch_and_phash_file(self, file_hash: str) -> PerceptuallyHashedFile | FailedPerceptuallyHashedFile:
+        """
+        Retrieves the file from Hydrus and calculates its perceptual hash and returns the result.
+
+        Returns FailedPerceptuallyHashedFile with the failed video hash if there are any errors.
+        """
+        return self.phash_fetched_file(file_hash, self.fetch_file_or_error(file_hash))
 
 
 @dataclass
@@ -174,8 +191,10 @@ class HydrusVideoDeduplicator:
         custom_query: Sequence[str] | None = None,
         update_progress_callback: UpdateDedupeProgressCallback | None = None,
         should_skip_step_fn: Callable[[], bool] | None = None,
+        gpu_decode: bool = False,
     ):
         self.db = db
+        self.gpu_decode = gpu_decode
         self.client = client
         self.similarity_threshold = similarity_threshold
         self.job_count = job_count
@@ -315,7 +334,7 @@ class HydrusVideoDeduplicator:
         """
         Get only the files that have not been perceptually hashed in the db from a list of files.
         """
-        all_phashed_files = self.db.get_phashed_files()
+        all_phashed_files = set(self.db.get_phashed_files())
         return [file_hash for file_hash in file_hashes if file_hash not in all_phashed_files]
 
     def add_perceptual_hashes_to_db(self, video_hashes: Sequence[str]) -> PerceptualHashingStats:
@@ -333,42 +352,57 @@ class HydrusVideoDeduplicator:
                 unit="file",
                 colour="BLUE",
             ) as pbar:
-                filehasher = FileHasher(self.client, self.job_count)
+                filehasher = FileHasher(self.client, self.job_count, self.gpu_decode)
                 successful_phashed_count = 0
-                for video_hash in video_hashes:
-                    if self.update_progress_callback:
-                        self.update_progress_callback(HashingProgress(complete=pbar.n + 1, total=pbar.total))
-                    if self.should_skip_step_fn and self.should_skip_step_fn():
-                        return stats
+                # Download the next file from Hydrus in a background thread while the current file is hashed.
+                # Only one file is fetched ahead, and results are still processed and saved one at a time
+                # in the original order, so the database writes are exactly the same as before.
+                video_hashes = list(video_hashes)
+                prefetcher = ThreadPoolExecutor(max_workers=1, thread_name_prefix="hvd-prefetch")
+                next_fetch = prefetcher.submit(filehasher.fetch_file_or_error, video_hashes[0]) if video_hashes else None
+                try:
+                    for index, video_hash in enumerate(video_hashes):
+                        if self.update_progress_callback:
+                            self.update_progress_callback(HashingProgress(complete=pbar.n + 1, total=pbar.total))
+                        if self.should_skip_step_fn and self.should_skip_step_fn():
+                            return stats
 
-                    result = filehasher.fetch_and_phash_file(video_hash)
-                    if isinstance(result, FailedPerceptuallyHashedFile):
-                        # We only want to add the failure to the page if the file was the actual cause of failure.
-                        if isinstance(result.exc, HydrusApiException):
-                            stats.failed_from_api_errors_count += 1
-                            print("[red]Hydrus API error during perceptual hashing:")
-                            print(f"{result.exc}")
+                        fetched = next_fetch.result()
+                        next_fetch = None
+                        if index + 1 < len(video_hashes):
+                            next_fetch = prefetcher.submit(filehasher.fetch_file_or_error, video_hashes[index + 1])
+                        result = filehasher.phash_fetched_file(video_hash, fetched)
+                        del fetched
+                        if isinstance(result, FailedPerceptuallyHashedFile):
+                            # We only want to add the failure to the page if the file was the actual cause of failure.
+                            if isinstance(result.exc, HydrusApiException):
+                                stats.failed_from_api_errors_count += 1
+                                print("[red]Hydrus API error during perceptual hashing:")
+                                print(f"{result.exc}")
+                            else:
+                                stats.failed_from_phash_count += 1
+                                print("[red]Failed to perceptually hash a file.")
+                                print(f"Failed file SHA256 hash: {result.file_hash}")
+                                print(f"{result.exc}")
+                                if self.page_logger:
+                                    self.page_logger.add_failed_video(result.file_hash)
                         else:
-                            stats.failed_from_phash_count += 1
-                            print("[red]Failed to perceptually hash a file.")
-                            print(f"Failed file SHA256 hash: {result.file_hash}")
-                            print(f"{result.exc}")
-                            if self.page_logger:
-                                self.page_logger.add_failed_video(result.file_hash)
-                    else:
-                        self.db.add_to_phashed_files_queue(result.file_hash, result.perceptual_hash)
-                        stats.success_hash_count += 1
-                        successful_phashed_count += 1
-                        # Commit periodically to save progress in case something fails.
-                        COMMIT_BATCH_SIZE = 4
-                        if successful_phashed_count % COMMIT_BATCH_SIZE == 0:
-                            self.db.commit()
+                            self.db.add_to_phashed_files_queue(result.file_hash, result.perceptual_hash)
+                            stats.success_hash_count += 1
+                            successful_phashed_count += 1
+                            # Commit periodically to save progress in case something fails.
+                            COMMIT_BATCH_SIZE = 4
+                            if successful_phashed_count % COMMIT_BATCH_SIZE == 0:
+                                self.db.commit()
 
-                    # Collect garbage now to avoid huge memory usage from the video files and frames.
-                    gc.collect()
-                    pbar.update(1)
-                    if self.update_progress_callback:
-                        self.update_progress_callback(HashingProgress(complete=pbar.n, total=pbar.total))
+                        # Collect garbage now to avoid huge memory usage from the video files and frames.
+                        gc.collect()
+                        pbar.update(1)
+                        if self.update_progress_callback:
+                            self.update_progress_callback(HashingProgress(complete=pbar.n, total=pbar.total))
+                finally:
+                    # Don't wait on a pending download if hashing was stopped early.
+                    prefetcher.shutdown(wait=False, cancel_futures=True)
         except KeyboardInterrupt:
             raise CancelledPerceptualHashException(stats)
         gc.collect()
@@ -449,6 +483,11 @@ class HydrusVideoDeduplicator:
             "SELECT hash_id FROM shape_search_cache WHERE searched_distance is NULL or searched_distance < :threshold",
             {"threshold": search_threshold},
         ).fetchall()
+
+        # Speed up the search with an exact in-memory distance index (falls back to the original code if it
+        # can't be built, or if HVD_FAST_SEARCH=0). The tree isn't modified during this phase.
+        if len(files) > 0 and tree.enable_fast_search_index():
+            print("[blue] Using fast search index.")
 
         num_similar_pairs = 0
         with tqdm(

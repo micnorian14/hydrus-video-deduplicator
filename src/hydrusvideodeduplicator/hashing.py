@@ -11,13 +11,13 @@ if TYPE_CHECKING:
 from .vpdqpy.vpdqpy import Vpdq, VpdqHash
 
 
-def compute_phash(video: Path | str | bytes, num_threads: int = 0) -> VpdqHash:
+def compute_phash(video: Path | str | bytes, num_threads: int = 0, gpu_decode: bool = False) -> VpdqHash:
     """
     Calculate the perceptual hash of a video.
 
     Returns the perceptual hash of the video.
     """
-    phash = Vpdq.computeHash(video, num_threads)
+    phash = Vpdq.computeHash(video, num_threads, gpu_decode)
     return phash
 
 

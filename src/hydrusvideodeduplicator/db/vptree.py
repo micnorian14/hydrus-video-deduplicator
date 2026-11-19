@@ -153,6 +153,20 @@ class VpTreeManager:
         self._non_vp_treed_perceptual_hash_ids = set()
         self._root_node_perceptual_hash_id = None
         self._reported_on_a_broken_branch = False
+        # Optional in-memory index used only to compute search distances faster (see db/fast_search.py).
+        # None means "use the original calculate_distance() for everything".
+        self._search_distance_index = None
+
+    def enable_fast_search_index(self) -> bool:
+        """
+        Build the read-only fast distance index for search_file(). Only call this when the tree will not be
+        modified while searching (the duplicate search phase). Distances are identical to calculate_distance();
+        anything the index doesn't cover still uses calculate_distance(). Returns True if the index is in use.
+        """
+        from hydrusvideodeduplicator.db.fast_search import SearchDistanceIndex
+
+        self._search_distance_index = SearchDistanceIndex.build(self.db)
+        return self._search_distance_index is not None
 
     def add_leaf(self, perceptual_hash_id, perceptual_hash):
         already_in_tree = self.db.execute(
@@ -714,6 +728,14 @@ class VpTreeManager:
             total_nodes_searched = 0
 
             for search_perceptual_hash in search_perceptual_hashes:
+                # Fast path: precompute this query's distance to every indexed node in one go (exact same values
+                # as calculate_distance). The tree walk below is unchanged; it just looks the value up.
+                fast_distances = None
+                fast_positions = None
+                if self._search_distance_index is not None:
+                    fast_distances = self._search_distance_index.distances_for(search_perceptual_hash)
+                    fast_positions = self._search_distance_index.position_of
+
                 next_potentials = [self._root_node_perceptual_hash_id]
 
                 while len(next_potentials) > 0:
@@ -743,7 +765,13 @@ class VpTreeManager:
 
                         # first check the node itself--is it similar?
 
-                        node_hamming_distance = calculate_distance(search_perceptual_hash, node_perceptual_hash)
+                        node_hamming_distance = None
+                        if fast_distances is not None:
+                            fast_position = fast_positions.get(node_perceptual_hash_id)
+                            if fast_position is not None:
+                                node_hamming_distance = fast_distances[fast_position]
+                        if node_hamming_distance is None:  # original path (also the fallback)
+                            node_hamming_distance = calculate_distance(search_perceptual_hash, node_perceptual_hash)
 
                         if node_hamming_distance <= search_radius:
                             if node_perceptual_hash_id in similar_perceptual_hash_ids_to_distances:
