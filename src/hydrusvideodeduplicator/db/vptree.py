@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import collections
+import contextlib
 import logging
+import os
 import random
 import sqlite3
 from typing import TYPE_CHECKING
@@ -134,6 +136,65 @@ def build_key_to_list_dict(pairs):
     return d
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# Fast tree building (used only by Dedup.process_phashed_file_queue, see fast_tree_building()).
+#
+# add_leaf() walks from the root down to where the new file belongs. On large trees that walk visits a huge number
+# of nodes per file, and for each one the original code does a SELECT, a full vPDQ comparison, and afterwards one
+# UPDATE per visited node for the population counters. The fast path makes the same decisions and the same writes:
+#   * node rows are read once from the DB and then kept in memory (and updated in memory exactly as the DB is);
+#   * distances come from the exact SearchDistanceIndex (db/fast_search.py), falling back to calculate_distance;
+#   * the population UPDATEs are sent with executemany (same statements, same order, less Python overhead);
+#   * all of one file's tree writes happen inside a SAVEPOINT, so an interruption (Ctrl+C) can never leave a
+#     half-inserted file in the tree; the tree is then exactly as it was before that file.
+# The in-memory copy is only valid while nothing else modifies shape_vptree, which is true during that phase.
+# Set the environment variable HVD_FAST_INSERT=0 to use the original code.
+# ---------------------------------------------------------------------------------------------------------------
+
+_active_fast_insert = None  # the _FastInsertState in use, or None
+
+
+def fast_insert_enabled() -> bool:
+    return os.environ.get("HVD_FAST_INSERT", "1").strip() != "0"
+
+
+class _FastInsertState:
+    def __init__(self, db: DedupeDB.DedupeDb):
+        self.db = db
+        # phash_id -> [phash, radius, inner_id, inner_population, outer_id, outer_population], same as the DB row
+        self.nodes = {}
+        self.distance_index = None
+
+    def get_node(self, phash_id):
+        node = self.nodes.get(phash_id)
+        if node is None:
+            row = self.db.execute(
+                "SELECT phash, radius, inner_id, inner_population, outer_id, outer_population FROM shape_perceptual_hashes NATURAL JOIN shape_vptree WHERE phash_id = ?;",  # noqa: E501
+                (phash_id,),
+            ).fetchone()
+            if row is None:
+                return None  # not cached, exactly like the original (which re-queries every time)
+            node = self.nodes[phash_id] = list(row)
+        return node
+
+
+@contextlib.contextmanager
+def fast_tree_building(db: DedupeDB.DedupeDb):
+    """While active, add_leaf() calls on `db` use the fast path. Yields True if the fast path is in use."""
+    global _active_fast_insert
+    state = None
+    if fast_insert_enabled():
+        state = _FastInsertState(db)
+        from hydrusvideodeduplicator.db.fast_search import SearchDistanceIndex
+
+        state.distance_index = SearchDistanceIndex.build(db)  # None => use calculate_distance for everything
+    _active_fast_insert = state
+    try:
+        yield state is not None
+    finally:
+        _active_fast_insert = None
+
+
 class VpTreeManager:
     TemporaryIntegerTableNameCache()
 
@@ -169,6 +230,10 @@ class VpTreeManager:
         return self._search_distance_index is not None
 
     def add_leaf(self, perceptual_hash_id, perceptual_hash):
+        state = _active_fast_insert
+        if state is not None and state.db is self.db:
+            return self._add_leaf_fast(state, perceptual_hash_id, perceptual_hash)
+
         already_in_tree = self.db.execute(
             "SELECT 1 FROM shape_vptree WHERE phash_id = ?;", (perceptual_hash_id,)
         ).fetchone()
@@ -303,6 +368,162 @@ class VpTreeManager:
             (perceptual_hash_id, parent_id, radius, inner_id, inner_population, outer_id, outer_population),
         )
 
+        self.clear_perceptual_hashes_from_vptree_node_cache((perceptual_hash_id,))
+
+    def _add_leaf_fast(self, state: _FastInsertState, perceptual_hash_id, perceptual_hash):
+        """Same decisions and same resulting rows as add_leaf() above; see the 'Fast tree building' notes."""
+        already_in_tree = self.db.execute(
+            "SELECT 1 FROM shape_vptree WHERE phash_id = ?;", (perceptual_hash_id,)
+        ).fetchone()
+
+        if already_in_tree is not None:
+            return
+
+        result = self.db.execute("SELECT phash_id FROM shape_vptree WHERE parent_id IS NULL;").fetchone()
+
+        parent_id = None
+        ancestors_we_are_inside = []
+        ancestors_we_are_outside = []
+        writes = []  # (sql, params) issued during the walk in the original, in the same order
+        node_edits = []  # (node, field index, value): in-memory copy of those writes, applied after they succeed
+
+        if result is not None:
+            (root_node_perceptual_hash_id,) = result
+
+            fast_distances = None
+            fast_positions = None
+            if state.distance_index is not None:
+                fast_distances = state.distance_index.distances_for(perceptual_hash)
+                fast_positions = state.distance_index.position_of
+
+            an_ancestor_is_unbalanced = False
+
+            next_ancestor_id = root_node_perceptual_hash_id
+
+            while next_ancestor_id is not None:
+                ancestor_id = next_ancestor_id
+
+                node = state.get_node(ancestor_id)
+
+                if node is None:
+                    if not self._reported_on_a_broken_branch:
+                        message = "Broken branch detected. Either restart the program and see if it goes away, or reset your dedupe tree using '--clear-search-tree'."  # noqa: E501
+
+                        print(message)
+                        log.error(message)
+                        log.error(f"perceptual_hash: {perceptual_hash}\n")
+                        log.error(f"phash_id: {perceptual_hash_id}\n")
+                        log.error(f"\nnext_ancestor_id: {next_ancestor_id}\nancestor phash id: {ancestor_id}")
+
+                        self._reported_on_a_broken_branch = True
+
+                    parent_id = ancestor_id
+
+                    break
+
+                (
+                    ancestor_perceptual_hash,
+                    ancestor_radius,
+                    ancestor_inner_id,
+                    ancestor_inner_population,
+                    ancestor_outer_id,
+                    ancestor_outer_population,
+                ) = node
+
+                distance_to_ancestor = None
+                if fast_distances is not None:
+                    fast_position = fast_positions.get(ancestor_id)
+                    if fast_position is not None:
+                        distance_to_ancestor = fast_distances[fast_position]
+                if distance_to_ancestor is None:
+                    distance_to_ancestor = calculate_distance(perceptual_hash, ancestor_perceptual_hash)
+
+                if ancestor_radius is None or distance_to_ancestor <= ancestor_radius:
+                    ancestors_we_are_inside.append(ancestor_id)
+                    ancestor_inner_population += 1
+                    next_ancestor_id = ancestor_inner_id
+
+                    if ancestor_inner_id is None:
+                        writes.append(
+                            (
+                                "UPDATE shape_vptree SET inner_id = ?, radius = ? WHERE phash_id = ?;",
+                                (perceptual_hash_id, distance_to_ancestor, ancestor_id),
+                            )
+                        )
+                        node_edits.append((node, 2, perceptual_hash_id))
+                        node_edits.append((node, 1, distance_to_ancestor))
+
+                        parent_id = ancestor_id
+
+                else:
+                    ancestors_we_are_outside.append(ancestor_id)
+                    ancestor_outer_population += 1
+                    next_ancestor_id = ancestor_outer_id
+
+                    if ancestor_outer_id is None:
+                        writes.append(
+                            ("UPDATE shape_vptree SET outer_id = ? WHERE phash_id = ?;", (perceptual_hash_id, ancestor_id))
+                        )
+                        node_edits.append((node, 4, perceptual_hash_id))
+
+                        parent_id = ancestor_id
+
+                if not an_ancestor_is_unbalanced and ancestor_inner_population + ancestor_outer_population > 16:
+                    larger = max(ancestor_inner_population, ancestor_outer_population)
+                    smaller = min(ancestor_inner_population, ancestor_outer_population)
+
+                    if smaller / larger < 0.5:
+                        writes.append(
+                            (
+                                "INSERT OR IGNORE INTO shape_maintenance_branch_regen ( phash_id ) VALUES ( ? );",
+                                (ancestor_id,),
+                            )
+                        )
+
+                        an_ancestor_is_unbalanced = True
+
+        # Write everything for this file as one unit. (The walk above never reads anything it would have written,
+        # so doing the writes after the walk gives exactly the same rows as the original.)
+        use_savepoint = self.db.conn.in_transaction  # a SAVEPOINT outside a transaction would commit on RELEASE
+        if use_savepoint:
+            self.db.execute("SAVEPOINT hvd_add_leaf;")
+        try:
+            for sql, params in writes:
+                self.db.execute(sql, params)
+            if ancestors_we_are_inside:
+                self.db.cur.executemany(
+                    "UPDATE shape_vptree SET inner_population = inner_population + 1 WHERE phash_id = ?;",
+                    [(ancestor_id,) for ancestor_id in ancestors_we_are_inside],
+                )
+            if ancestors_we_are_outside:
+                self.db.cur.executemany(
+                    "UPDATE shape_vptree SET outer_population = outer_population + 1 WHERE phash_id = ?;",
+                    [(ancestor_id,) for ancestor_id in ancestors_we_are_outside],
+                )
+            self.db.execute(
+                "INSERT OR REPLACE INTO shape_vptree ( phash_id, parent_id, radius, inner_id, inner_population, outer_id, outer_population ) VALUES ( ?, ?, ?, ?, ?, ?, ? );",  # noqa: E501
+                (perceptual_hash_id, parent_id, None, None, 0, None, 0),
+            )
+        except BaseException:
+            # Undo this file's partial tree writes (e.g. Ctrl+C), and forget the in-memory copy so it is re-read.
+            state.nodes.clear()
+            if use_savepoint:
+                self.db.execute("ROLLBACK TO hvd_add_leaf;")
+                self.db.execute("RELEASE hvd_add_leaf;")
+            raise
+        if use_savepoint:
+            self.db.execute("RELEASE hvd_add_leaf;")
+
+        # Mirror the writes in memory.
+        for node, field, value in node_edits:
+            node[field] = value
+        for ancestor_id in ancestors_we_are_inside:
+            state.nodes[ancestor_id][3] += 1
+        for ancestor_id in ancestors_we_are_outside:
+            state.nodes[ancestor_id][5] += 1
+
+        self.clear_perceptual_hashes_from_vptree_node_cache(ancestors_we_are_inside)
+        self.clear_perceptual_hashes_from_vptree_node_cache(ancestors_we_are_outside)
         self.clear_perceptual_hashes_from_vptree_node_cache((perceptual_hash_id,))
 
     def regenerate_tree(self):

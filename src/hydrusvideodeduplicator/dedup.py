@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
     FileHash = str
 
+import contextlib
 import gc
 from concurrent.futures import ThreadPoolExecutor
 
@@ -425,13 +426,17 @@ class HydrusVideoDeduplicator:
         This inserts the queue entries into their respective tables and then inserts the file into the vptree.
         """
         results = self.db.execute("SELECT file_hash, phash FROM phashed_file_queue").fetchall()
-        with tqdm(
+        # Faster, identical tree inserts (HVD_FAST_INSERT=0 disables). See vptree.fast_tree_building.
+        fast_building = vptree.fast_tree_building(self.db) if results else contextlib.nullcontext(False)
+        with fast_building as fast_insert, tqdm(
             total=len(results),
             desc="Building search tree",
             dynamic_ncols=True,
             unit="file",
             colour="BLUE",
         ) as pbar:
+            if fast_insert:
+                pbar.write("Using fast search tree building.")
             processed_count = 0
             for file_hash, perceptual_hash in results:
                 if self.update_progress_callback:

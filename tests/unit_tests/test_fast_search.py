@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import random
 import unittest
+from contextlib import nullcontext
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -77,12 +78,50 @@ class TestFastSearch(unittest.TestCase):
                 self.assertEqual(got, expected, f"threshold {threshold}")  # same pairs, distances and order
             db.close()
 
+    def test_fast_tree_building_identical(self):
+        """Inserting files with vptree.fast_tree_building active must give exactly the same rows in every table."""
+
+        def build(tmpdir: str, fast: bool):
+            db = DedupeDB.DedupeDb(Path(tmpdir), "fast.sqlite" if fast else "orig.sqlite")
+            db.init_connection()
+            db.create_tables()
+            db.commit()
+            hashes = _make_hashes(seed=99)
+            with vptree.fast_tree_building(db) if fast else nullcontext(False) as active:
+                self.assertEqual(active, fast)
+                for i, phash in enumerate(hashes + hashes[:10]):  # re-adding some exercises the already-in-tree path
+                    file_hash = f"{i:064x}"
+                    db.add_file(file_hash)
+                    db.add_perceptual_hash(phash)
+                    db.associate_file_with_perceptual_hash(file_hash, phash)
+                    if i % 16 == 0:
+                        db.commit()
+            db.commit()
+            tables = {}
+            for (name,) in db.execute("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name;").fetchall():
+                tables[name] = sorted(db.execute(f"SELECT * FROM {name};").fetchall(), key=repr)
+            db.close()
+            return tables
+
+        with TemporaryDirectory() as tmpdir:
+            original = build(tmpdir, fast=False)
+            fast = build(tmpdir, fast=True)
+            self.assertGreater(len(original["shape_vptree"]), 50)
+            self.assertEqual(fast, original)
+
     def test_can_be_disabled(self):
         old = os.environ.get("HVD_FAST_SEARCH")
+        old_insert = os.environ.get("HVD_FAST_INSERT")
         os.environ["HVD_FAST_SEARCH"] = "0"
+        os.environ["HVD_FAST_INSERT"] = "0"
         try:
             self.assertFalse(fast_search_enabled())
+            self.assertFalse(vptree.fast_insert_enabled())
         finally:
+            if old_insert is None:
+                del os.environ["HVD_FAST_INSERT"]
+            else:
+                os.environ["HVD_FAST_INSERT"] = old_insert
             if old is None:
                 del os.environ["HVD_FAST_SEARCH"]
             else:
