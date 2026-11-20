@@ -64,6 +64,15 @@ def main(
     clear_search_tree: Annotated[
         Optional[bool], typer.Option(help="Clear the search tree that tracks what files have already been compared.")
     ] = False,
+    relink_search_tree: Annotated[
+        Optional[bool],
+        typer.Option(
+            help="Repair a damaged search tree: relink every perceptual hash into one valid search tree (takes "
+            "seconds, nothing is re-hashed), then clear the search cache so the following duplicate search checks "
+            "every file again (this search can take a long time on big databases, and can be stopped and resumed). "
+            "Back up your database first. Can't be combined with --clear-search-tree."
+        ),
+    ] = False,
     clear_search_cache: Annotated[
         Optional[bool],
         typer.Option(
@@ -133,6 +142,12 @@ def main(
     # This should not happen because there's a default val in config.py
     if not api_url:
         print_and_log(logger, "Hydrus API URL is not set. Please set with '--api-url'.")
+        exit_from_failure()
+
+    if clear_search_tree and relink_search_tree:
+        print_and_log(
+            logger, "Use either --clear-search-tree or --relink-search-tree, not both.", logging.ERROR
+        )
         exit_from_failure()
 
     if threshold < 0.0 or threshold > 100.0:
@@ -205,6 +220,22 @@ def main(
             with db.conn:
                 db.clear_search_tree()
             print("[green] Cleared the search tree.")
+
+        if relink_search_tree:
+            print("[blue] Relinking the search tree. This only takes a moment...")
+            db.begin_transaction()
+            with db.conn:  # all-or-nothing: if anything fails or is interrupted, the DB is left unchanged
+                relink = db.relink_search_tree()
+            print(
+                f"[green] Relinked the search tree: {relink['tree_nodes']} perceptual hashes, "
+                f"{relink['files_to_search']} files will be searched for duplicates again."
+            )
+            skipped = relink["skipped_missing_phash"] + relink["skipped_missing_file"]
+            if skipped:
+                print(
+                    f"[yellow] Skipped {skipped} file entries whose perceptual hash or file record is missing "
+                    "(they were already unusable; nothing was deleted)."
+                )
 
         if clear_search_cache:
             db.begin_transaction()

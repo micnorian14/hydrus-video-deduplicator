@@ -45,6 +45,9 @@ def _make_hashes(seed: int = 1234) -> list[bytes]:
 
 @unittest.skipUnless(fast_search_enabled(), "numpy with bitwise_count not available")
 class TestFastSearch(unittest.TestCase):
+    def setUp(self):
+        vptree.TemporaryIntegerTableNameCache()  # fresh temp-table name cache for this test's own DB connection
+
     def test_distances_match_calculate_distance(self):
         hashes = [h for h in _make_hashes() if h]
         index = SearchDistanceIndex(list(range(len(hashes))), hashes)

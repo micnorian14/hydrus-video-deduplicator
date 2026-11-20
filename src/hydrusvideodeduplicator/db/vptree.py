@@ -35,6 +35,41 @@ def calculate_distance(phash_a: bytes, phash_b: bytes) -> int:
     return fix_vpdq_similarity(vpdq.matchHashBytes(phash_a, phash_b, 31))
 
 
+# Largest value calculate_distance() can return (similarity 0 -> distance 101).
+MAX_DISTANCE = fix_vpdq_similarity(0.0)
+
+
+def chain_tree_rows(perceptual_hash_ids: list[int]) -> list[tuple]:
+    """
+    shape_vptree rows that link the given phash_ids into one chain: each node's only child is the next id.
+
+    Why this is a valid tree: every non-last node gets radius MAX_DISTANCE and its child as inner child. The inner
+    side of a node means "distance <= radius", which is always true when radius is the largest possible distance,
+    so every node really does belong inside all of its ancestors. search_perceptual_hashes() therefore always
+    descends (101 <= radius + search radius) and checks every node, and add_leaf() (fast or original) always goes
+    "inside" and appends new files at the end of the chain. The last node is a normal leaf (radius NULL).
+    For this distance metric almost every pair of unrelated videos is at distance 101, so trees built one file at
+    a time already end up as (mostly) this same chain; this just builds it directly and completely.
+    Row layout: (phash_id, parent_id, radius, inner_id, inner_population, outer_id, outer_population).
+    """
+    rows = []
+    count = len(perceptual_hash_ids)
+    for position, phash_id in enumerate(perceptual_hash_ids):
+        is_last = position == count - 1
+        rows.append(
+            (
+                phash_id,
+                perceptual_hash_ids[position - 1] if position > 0 else None,
+                None if is_last else MAX_DISTANCE,
+                None if is_last else perceptual_hash_ids[position + 1],
+                count - position - 1,  # inner_population = everything below this node
+                None,
+                0,
+            )
+        )
+    return rows
+
+
 class TemporaryIntegerTableNameCache:
     my_instance = None
 

@@ -9,7 +9,7 @@ from pathlib import Path
 from rich import print
 
 from ..__about__ import __version__
-from .vptree import VpTreeManager
+from .vptree import VpTreeManager, chain_tree_rows
 
 
 dedupedblog = logging.getLogger("db")
@@ -215,6 +215,54 @@ class DedupeDb:
         self.execute("DELETE FROM shape_vptree")
         self.execute("DELETE FROM shape_search_cache")
         self.execute("DELETE FROM shape_maintenance_branch_regen")
+
+    def relink_search_tree(self) -> dict[str, int]:
+        """
+        Repair a damaged search tree without re-inserting files one at a time.
+
+        Every perceptual hash used by a file is linked into one valid tree (see vptree.chain_tree_rows), so every
+        file is reachable by the duplicate search again. Then the search cache is reset so the next runs search
+        every file again. Nothing is re-hashed and the phashed file queue is left alone. Files whose perceptual
+        hash or file row is missing are skipped, like clear_search_tree() does (nothing is deleted for them).
+
+        The end state is equivalent to clear_search_tree() followed by a full "Building search tree" phase: the
+        same files are in the tree and in the search cache (with searched_distance NULL), so the same duplicate
+        pairs are found. Only the tree layout differs. Run it inside a transaction so it's all-or-nothing.
+        """
+        broken_phash = self.execute(
+            "SELECT COUNT(*) FROM shape_perceptual_hash_map WHERE phash_id NOT IN ( SELECT phash_id FROM shape_perceptual_hashes );"  # noqa: E501
+        ).fetchone()[0]
+        broken_file = self.execute(
+            "SELECT COUNT(*) FROM shape_perceptual_hash_map WHERE hash_id NOT IN ( SELECT hash_id FROM files );"
+        ).fetchone()[0]
+
+        # The files clear_search_tree() would requeue (valid perceptual hash AND file row), and their hashes.
+        valid_map = "shape_perceptual_hash_map JOIN shape_perceptual_hashes USING ( phash_id ) JOIN files USING ( hash_id )"  # noqa: E501
+        phash_ids = [
+            phash_id
+            for (phash_id,) in self.execute(f"SELECT DISTINCT phash_id FROM {valid_map} ORDER BY phash_id;").fetchall()
+        ]
+
+        self.execute("DELETE FROM shape_vptree;")
+        self.cur.executemany(
+            "INSERT INTO shape_vptree ( phash_id, parent_id, radius, inner_id, inner_population, outer_id, outer_population ) VALUES ( ?, ?, ?, ?, ?, ?, ? );",  # noqa: E501
+            chain_tree_rows(phash_ids),
+        )
+        self.execute("DELETE FROM shape_maintenance_branch_regen;")
+
+        # Same search cache as after clear_search_tree() + rebuilding: one row per valid file, not yet searched.
+        self.execute("DELETE FROM shape_search_cache;")
+        self.execute(
+            f"INSERT INTO shape_search_cache ( hash_id, searched_distance ) SELECT DISTINCT hash_id, NULL FROM {valid_map};"
+        )
+        files_to_search = self.execute("SELECT COUNT(*) FROM shape_search_cache;").fetchone()[0]
+
+        return {
+            "tree_nodes": len(phash_ids),
+            "files_to_search": files_to_search,
+            "skipped_missing_phash": broken_phash,
+            "skipped_missing_file": broken_file,
+        }
 
     def clear_search_cache(self):
         """Clear the search cache for all files."""
