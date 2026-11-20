@@ -493,6 +493,9 @@ class HydrusVideoDeduplicator:
         # can't be built, or if HVD_FAST_SEARCH=0). The tree isn't modified during this phase.
         if len(files) > 0 and tree.enable_fast_search_index():
             print("[blue] Using fast search index.")
+            # Skip the part of the tree walk every search takes identically (HVD_SCAN_SEARCH=0 disables).
+            if tree.enable_fast_search_scan():
+                print("[blue] Using fast search scan.")
 
         num_similar_pairs = 0
         with tqdm(

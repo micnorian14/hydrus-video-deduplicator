@@ -172,15 +172,20 @@ class SearchDistanceIndex:
         Distance from `query` to every indexed node, identical to vptree.calculate_distance(query, node_phash).
         Indexed by self.position_of[phash_id]. Returns None for a query it does not handle (caller falls back).
         """
+        distances = self.distance_array_for(query)
+        return None if distances is None else distances.tolist()
+
+    def distance_array_for(self, query: bytes):
+        """Same values as distances_for(), as a numpy int64 array (or None => caller falls back)."""
         if not isinstance(query, (bytes, bytearray)) or len(query) == 0 or len(query) % FRAME_BYTES:
             return None
         try:
-            return self._distances_for(query)
+            return self._distance_array(query)
         except Exception as exc:  # e.g. MemoryError on a huge query: use the original code for this query
             log.warning(f"Fast search index failed for one query, using the original code for it: {exc!r}")
             return None
 
-    def _distances_for(self, query: bytes) -> list[int]:
+    def _distance_array(self, query: bytes):
         q = np.frombuffer(query, dtype=np.uint64).reshape(-1, 4)
         num_query_frames = q.shape[0]
         query_blocks = q.view(np.uint16).reshape(num_query_frames, _BLOCKS)
@@ -201,4 +206,4 @@ class SearchDistanceIndex:
                 # each query frame counts at most once per node, like the C code
                 matched_frames[np.unique(self._frame_owner[hits])] += 1
         similarity = (matched_frames * 100) // num_query_frames  # exact integer floor(100 * m / n)
-        return ((100 - similarity) + 1).tolist()
+        return (100 - similarity) + 1  # always within [1, 101] because 0 <= similarity <= 100
