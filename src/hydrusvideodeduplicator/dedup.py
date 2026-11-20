@@ -46,6 +46,10 @@ class FailedPerceptuallyHashedFile:
     exc: Exception
 
 
+# Progress bar speed/ETA smoothing (display only). tqdm's default 0.3 makes the speed jump with every slow or fast
+# file; 0.05 averages over roughly the last ~20 updates, so it still follows real changes but swings much less.
+TQDM_SMOOTHING = 0.05
+
 # Pipelined Hydrus calls for "Finding potential duplicates" (see _find_potential_duplicates_pipelined).
 PIPELINE_DEPTH = 8  # at most this many searched files wait for their Hydrus calls
 
@@ -359,6 +363,7 @@ class HydrusVideoDeduplicator:
         stats = PerceptualHashingStats()
         try:
             with tqdm(
+                smoothing=TQDM_SMOOTHING,
                 total=len(video_hashes),
                 desc="Perceptually hashing files",
                 dynamic_ncols=True,
@@ -470,6 +475,7 @@ class HydrusVideoDeduplicator:
                 failure.append(exc)
 
         with tqdm(
+            smoothing=TQDM_SMOOTHING,
             dynamic_ncols=True, total=len(files), desc="Finding potential duplicates", unit="file", colour="BLUE"
         ) as pbar:
 
@@ -572,6 +578,7 @@ class HydrusVideoDeduplicator:
         # Faster, identical tree inserts (HVD_FAST_INSERT=0 disables). See vptree.fast_tree_building.
         fast_building = vptree.fast_tree_building(self.db) if results else contextlib.nullcontext(False)
         with fast_building as fast_insert, tqdm(
+            smoothing=TQDM_SMOOTHING,
             total=len(results),
             desc="Building search tree",
             dynamic_ncols=True,
@@ -646,6 +653,7 @@ class HydrusVideoDeduplicator:
 
         num_similar_pairs = 0
         with tqdm(
+            smoothing=TQDM_SMOOTHING,
             dynamic_ncols=True, total=len(files), desc="Finding potential duplicates", unit="file", colour="BLUE"
         ) as pbar:
             processed_count = 0
