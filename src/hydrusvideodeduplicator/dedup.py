@@ -16,6 +16,9 @@ if TYPE_CHECKING:
 
 import contextlib
 import gc
+import os
+import queue
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import hydrusvideodeduplicator.hydrus_api as hydrus_api
@@ -41,6 +44,15 @@ class FailedPerceptuallyHashedFile:
 
     file_hash: FileHash
     exc: Exception
+
+
+# Pipelined Hydrus calls for "Finding potential duplicates" (see _find_potential_duplicates_pipelined).
+PIPELINE_DEPTH = 8  # at most this many searched files wait for their Hydrus calls
+
+
+def pipeline_enabled() -> bool:
+    """Set the environment variable HVD_PIPELINE=0 to make the Hydrus calls one after another on the main thread."""
+    return os.environ.get("HVD_PIPELINE", "1").strip() != "0"
 
 
 class HydrusApiException(Exception):
@@ -409,6 +421,137 @@ class HydrusVideoDeduplicator:
         gc.collect()
         return stats
 
+    def _find_potential_duplicates_pipelined(self, tree, files, search_threshold) -> int:
+        """
+        Same work as the loop in find_potential_duplicates(), but while Hydrus handles one file's pairs the next
+        files are already being searched.
+
+        * The main thread searches files in the same order as the original loop and puts each file's pairs, in the
+          same order, into a small FIFO queue (PIPELINE_DEPTH files).
+        * ONE sender thread takes the files in order and makes exactly the same set_file_relationships calls
+          (same client and session, same bodies, one call at a time, same order) via mark_videos_as_duplicates().
+        * Only after ALL of a file's calls succeeded does the sender hand the file back. The main thread, which owns
+          the SQLite connection (sqlite3 connections must stay on their own thread), then does that file's DB write
+          (searched_distance), the commit every 64 files and the progress update, in order, exactly as before.
+          So a file is never marked as searched before Hydrus has received all of its pairs.
+        * Ctrl+C: the sender stops after the call in flight; files whose calls all finished are marked, later
+          ones are not (they are searched and sent again next run, exactly like an interrupted file today).
+        * A Hydrus error stops the sender; files before it are marked and the same exception is raised here.
+        * Any other error, or the GUI's skip, first lets the queued files finish, like the original loop would have.
+        """
+        num_similar_pairs = 0
+        processed_count = 0
+        COMMIT_BATCH_SIZE = 64
+        todo: queue.Queue = queue.Queue(maxsize=PIPELINE_DEPTH)
+        done: queue.Queue = queue.Queue()
+        stop = threading.Event()
+        failure: list[BaseException] = []
+        END = None
+
+        def sender():
+            try:
+                while True:
+                    try:
+                        item = todo.get(timeout=0.05)
+                    except queue.Empty:
+                        if stop.is_set():
+                            return
+                        continue
+                    if item is END or stop.is_set():
+                        return
+                    _, pairs = item
+                    for file_hash_a, file_hash_b in pairs:
+                        if stop.is_set():
+                            return
+                        self.hydlog.info(f'Similar files found: "{file_hash_a}" and "{file_hash_b}"')
+                        self.mark_videos_as_duplicates(file_hash_a, file_hash_b)
+                    done.put(item)
+            except BaseException as exc:  # reported to (and raised by) the main thread
+                failure.append(exc)
+
+        with tqdm(
+            dynamic_ncols=True, total=len(files), desc="Finding potential duplicates", unit="file", colour="BLUE"
+        ) as pbar:
+
+            def apply_done():
+                # Main thread: the original loop's per-file DB writes, for files whose Hydrus calls all succeeded.
+                nonlocal num_similar_pairs, processed_count
+                while True:
+                    try:
+                        hash_id, pairs = done.get_nowait()
+                    except queue.Empty:
+                        return
+                    num_similar_pairs += len(pairs)
+                    self.db.execute(
+                        "UPDATE shape_search_cache SET searched_distance = ? WHERE hash_id = ?;",
+                        (search_threshold, hash_id),
+                    )
+                    processed_count += 1
+                    if processed_count % COMMIT_BATCH_SIZE == 0:
+                        self.db.commit()
+                    pbar.update(1)
+                    if self.update_progress_callback:
+                        self.update_progress_callback(SearchingForDuplicatesProgress(complete=pbar.n, total=pbar.total))
+
+            def put(item):
+                # Short timeouts keep Ctrl+C responsive on Windows while the queue is full.
+                while True:
+                    apply_done()
+                    if failure:
+                        raise failure[0]
+                    try:
+                        todo.put(item, timeout=0.05)
+                        return
+                    except queue.Full:
+                        pass
+
+            def wait_for_sender():
+                while thread.is_alive():
+                    thread.join(0.05)
+                    apply_done()
+                apply_done()
+
+            thread = threading.Thread(target=sender, name="hvd-hydrus-sender", daemon=True)
+            thread.start()
+            try:
+                for hash_id in files:
+                    if self.update_progress_callback:
+                        self.update_progress_callback(SearchingForDuplicatesProgress(complete=pbar.n, total=pbar.total))
+                    if self.should_skip_step_fn and self.should_skip_step_fn():
+                        # Stop searching, but still send and report the pairs found so far.
+                        break
+
+                    hash_id = hash_id[0]
+                    result = tree.search_file(hash_id, max_hamming_distance=search_threshold)
+                    file_hash_a = self.db.get_file_hash(hash_id)
+                    pairs = []
+                    for similar_hash_id, distance in result:
+                        file_hash_b = self.db.get_file_hash(similar_hash_id)
+                        if hash_id != similar_hash_id:
+                            pairs.append((file_hash_a, file_hash_b))
+                    put((hash_id, pairs))
+                put(END)
+                wait_for_sender()
+                if failure:
+                    raise failure[0]
+            except BaseException as exc:
+                if isinstance(exc, KeyboardInterrupt):
+                    stop.set()  # finish only the call in flight
+                else:
+                    while thread.is_alive():  # let the queued files finish first, like the original loop
+                        try:
+                            todo.put(END, timeout=0.05)
+                            break
+                        except queue.Full:
+                            apply_done()
+                try:
+                    wait_for_sender()
+                except KeyboardInterrupt:  # a (second) Ctrl+C while waiting: stop waiting
+                    stop.set()
+                    apply_done()
+                raise
+        return num_similar_pairs // 2
+
     def mark_videos_as_duplicates(self, video1_hash: str, video2_hash: str):
         """Mark a pair of videos as duplicates in Hydrus."""
         new_relationship = {
@@ -496,6 +639,10 @@ class HydrusVideoDeduplicator:
             # Skip the part of the tree walk every search takes identically (HVD_SCAN_SEARCH=0 disables).
             if tree.enable_fast_search_scan():
                 print("[blue] Using fast search scan.")
+
+        if len(files) > 0 and pipeline_enabled():
+            print("[blue] Using pipelined Hydrus calls.")
+            return self._find_potential_duplicates_pipelined(tree, files, search_threshold)
 
         num_similar_pairs = 0
         with tqdm(
