@@ -26,6 +26,7 @@ import hydrusvideodeduplicator.hydrus_api as hydrus_api
 
 from .client import HVDClient
 from .db import DedupeDB, vptree
+from .dedup_util import console_print, print_user, style_user_text
 from .hashing import compute_phash
 from .page_logger import HydrusPageLogger
 from hvdaccelerators import vpdq
@@ -88,7 +89,8 @@ def skip_repeat_pairs_enabled_by_env() -> bool:
     return os.environ.get("HVD_SKIP_REPEAT_PAIRS", "0").strip().lower() in ("1", "true", "yes", "on")
 
 
-# Printed (yellow) at the start of "Finding potential duplicates" when --skip-repeat-pairs is on.
+# Printed at the start of "Finding potential duplicates" when --skip-repeat-pairs is on.
+# First line is blue (info); only the word "WARNING:" is red3 (not bold); flags in the text are magenta.
 # Lines are kept under 80 characters so they don't get re-wrapped on a standard console.
 SKIP_REPEAT_PAIRS_WARNING = (
     "Skipping repeat pair sends (faster).\n"
@@ -360,7 +362,7 @@ class HydrusVideoDeduplicator:
             video_hashes = list(self.client.get_video_hashes(self.search_tags))
             video_hashes = self.filter_unhashed(video_hashes)
             print(f"[blue]Found {len(video_hashes)} eligible files to perceptually hash.")
-            print("[cyan]\nTip: You can skip perceptual hashing at any time by pressing CTRL+C.\n")
+            print_user("\nTip: You can skip perceptual hashing at any time by pressing CTRL+C.\n")
             self.hydlog.info("Starting perceptual hash processing")
             self.db.begin_transaction()
             with self.db.conn:
@@ -390,15 +392,15 @@ class HydrusVideoDeduplicator:
                             print(
                                 f"[yellow]{stats.failed_from_phash_count} failures were from an error during perceptual hashing. Are the files corrupted?"  # noqa: E501
                             )
-                            print(
-                                "[cyan]\nTip: You could have seen which files failed directly in Hydrus by "
+                            print_user(
+                                "\nTip: You could have seen which files failed directly in Hydrus by "
                                 "creating a Hydrus page with the name 'failed' and "
                                 "running the program with '--failed-page-name=failed'\n"
                             )
                     print(f"[green]Added {stats.success_hash_count} new perceptual hashes to the database.")
 
         # Insert the perceptual hashed files into the vptree.
-        print("[cyan]\nTip: You can skip building the search tree at any time by pressing CTRL+C.\n")
+        print_user("\nTip: You can skip building the search tree at any time by pressing CTRL+C.\n")
         self.db.begin_transaction()
         with self.db.conn:
             try:
@@ -423,7 +425,7 @@ class HydrusVideoDeduplicator:
         #       while this is running.
         pre_dedupe_count = self.client.get_potential_duplicate_count_hydrus()
 
-        print("[cyan]\nTip: You can skip finding potential duplicates at any time by pressing CTRL+C.\n")
+        print_user("\nTip: You can skip finding potential duplicates at any time by pressing CTRL+C.\n")
         self.db.begin_transaction()
         with self.db.conn:
             try:
@@ -498,13 +500,13 @@ class HydrusVideoDeduplicator:
                                 # file=pbar.fp makes this work for the console and for tests that capture the bar.
                                 with pbar.external_write_mode(file=pbar.fp):
                                     print("[red]Hydrus API error during perceptual hashing:")
-                                    print(Text(str(result.exc), style="red"))
+                                    console_print(Text(str(result.exc)), highlight=False)
                             else:
                                 stats.failed_from_phash_count += 1
                                 with pbar.external_write_mode(file=pbar.fp):
                                     print("[red]Failed to perceptually hash a file.")
                                     print(f"[red]Failed file SHA256 hash: {result.file_hash}")
-                                    print(Text(str(result.exc), style="red"))
+                                    console_print(Text(str(result.exc)), highlight=False)
                                 if self.page_logger:
                                     self.page_logger.add_failed_video(result.file_hash)
                         else:
@@ -693,7 +695,8 @@ class HydrusVideoDeduplicator:
             colour="GREEN",
         ) as pbar:
             if fast_insert:
-                pbar.write("Using fast search tree building.")
+                with pbar.external_write_mode(file=pbar.fp):
+                    print("[blue]Using fast search tree building.")
             processed_count = 0
             for file_hash, perceptual_hash in results:
                 if self.update_progress_callback:
@@ -747,9 +750,8 @@ class HydrusVideoDeduplicator:
         ).fetchall()
 
         if len(files) > 0:
-            # Header in cyan, tips in plain text (no auto-highlighting); display only
-            tips_header, _, tips_rest = SPEED_TIPS.partition("\n")
-            print(Text.assemble((tips_header, "cyan"), "\n", tips_rest))
+            # "Speed tips:" is bold cyan; the rest of that line and the bullet lines are plain; display only
+            print_user(SPEED_TIPS)
 
         # Speed up the search with an exact in-memory distance index (falls back to the original code if it
         # can't be built, or if HVD_FAST_SEARCH=0). The tree isn't modified during this phase.
@@ -765,11 +767,9 @@ class HydrusVideoDeduplicator:
             # Opt-in, see RepeatPairSkipper. With it off, `send` is exactly the original call.
             skipper = RepeatPairSkipper(send)
             send = skipper
-            # First line blue (info); in the warning only the word "WARNING:" is bold red,
-            # and the rest of the warning is yellow (same style as the perceptual-hashing failure lines); display only
+            # First line blue (info); only the word "WARNING:" is red3 (not bold); flags are magenta; display only
             first_line, _, warning_lines = SKIP_REPEAT_PAIRS_WARNING.partition("\n")
-            _, _, warning_rest = warning_lines.partition("WARNING:")
-            print(Text.assemble((first_line, "blue"), "\n", ("WARNING:", "bold red"), (warning_rest, "yellow")))
+            console_print(Text.assemble((first_line, "blue"), "\n", style_user_text(warning_lines)), highlight=False)
         try:
             if len(files) > 0 and pipeline_enabled():
                 print("[blue] Using pipelined Hydrus calls.")

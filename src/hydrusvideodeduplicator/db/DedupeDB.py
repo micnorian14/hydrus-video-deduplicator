@@ -9,6 +9,7 @@ from pathlib import Path
 from rich import print
 
 from ..__about__ import __version__
+from ..dedup_util import print_user
 from .vptree import VpTreeManager, chain_tree_rows
 
 
@@ -192,8 +193,8 @@ class DedupeDb:
             if not phash_result:
                 # This should not happen. Perceptual hashes should always be in the database if there is a phash_id,
                 # otherwise we have no idea what perceptual hash it is.
-                print(
-                    f"[red]ERROR clearing search tree while to get perceptual_hash from phash_id {phash_id}. perceptual_hash not found. Your DB may be corrupt."  # noqa: E501
+                print_user(
+                    f"ERROR clearing search tree while to get perceptual_hash from phash_id {phash_id}. perceptual_hash not found. Your DB may be corrupt."  # noqa: E501
                 )
                 continue
             perceptual_hash = phash_result[0]
@@ -204,8 +205,8 @@ class DedupeDb:
             if not file_hash_result:
                 # This should not happen. File hashes should always be in the database if there is a hash_id,
                 # otherwise we have no idea what file it is in Hydrus.
-                print(
-                    f"[red]ERROR clearing search tree while to get file_hash from hash_id {hash_id}. file_hash not found. Your DB may be corrupt."  # noqa: E501
+                print_user(
+                    f"ERROR clearing search tree while to get file_hash from hash_id {hash_id}. file_hash not found. Your DB may be corrupt."  # noqa: E501
                 )
                 continue
             file_hash = file_hash_result[0]

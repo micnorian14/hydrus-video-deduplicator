@@ -9,7 +9,8 @@ import sqlite3
 from typing import TYPE_CHECKING
 
 from hvdaccelerators import vpdq
-from tqdm import tqdm
+
+from ..dedup_util import print_over_bar, style_user_text
 
 try:
     import numpy as np
@@ -407,7 +408,7 @@ class VpTreeManager:
                         # message += "You will not see this message again this boot."
                         message = "Broken branch detected. Either restart the program and see if it goes away, or reset your dedupe tree using '--clear-search-tree'."  # noqa: E501
 
-                        tqdm.write(message)
+                        print_over_bar(style_user_text(message))
                         log.error(message)
                         log.error(f"perceptual_hash: {perceptual_hash}\n")
                         log.error(f"phash_id: {perceptual_hash_id}\n")
@@ -542,7 +543,7 @@ class VpTreeManager:
                     if not self._reported_on_a_broken_branch:
                         message = "Broken branch detected. Either restart the program and see if it goes away, or reset your dedupe tree using '--clear-search-tree'."  # noqa: E501
 
-                        tqdm.write(message)
+                        print_over_bar(style_user_text(message))
                         log.error(message)
                         log.error(f"perceptual_hash: {perceptual_hash}\n")
                         log.error(f"phash_id: {perceptual_hash_id}\n")
@@ -979,7 +980,7 @@ class VpTreeManager:
                 "Your similar files search tree seemed to be damaged. Please regenerate it using '--clear-search-tree'!"
             )
             log.error(msg)
-            tqdm.write(msg)
+            print_over_bar(style_user_text(msg))
 
             return
 
