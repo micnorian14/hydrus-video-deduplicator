@@ -1,5 +1,11 @@
 # Hydrus Video Deduplicator (faster fork)
 
+<div align="center">
+
+![original 0.12.1 and this fork running the same query side by side](./docs/img/preview_fork.png)
+
+</div>
+
 This is a fork of [Hydrus Video Deduplicator](https://github.com/hydrusvideodeduplicator/hydrus-video-deduplicator). It does the same job and gives the same results, faster.
 
 - Every speed change gives identical hashes, search tree and potential duplicate pairs, and has a switch that
