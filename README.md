@@ -21,6 +21,13 @@ videos perceptually hashed. As in the original, videos include animated GIFs and
 
 The original README follows further down, from [Hydrus Video Deduplicator](#hydrus-video-deduplicator).
 
+## Built for backwards compatibility
+
+Every change in this fork, including the new flags, is backwards compatible with the original program. Your
+database, including its search tree, is generated and saved exactly as before. The fork only adds speed improvements
+and a few quality-of-life features. Some more aggressive optimizations were possible, but they were deliberately left
+out because they risked compatibility with existing databases.
+
 ## Install this fork
 
 The Windows exe on the original releases page and `pip install hydrusvideodeduplicator` both install the original
