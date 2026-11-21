@@ -52,7 +52,7 @@ say to run the exe. To update later, run `git pull` in the same folder.
 
 ## What's new in this fork
 
-**Speed (identical results).** GPU video decoding, a faster check for already-hashed files at startup, downloading
+**Speed.** GPU video decoding, a faster check for already-hashed files at startup, downloading
 the next file while the current one is hashed, an exact in-memory distance index and a shorter tree walk for
 "Finding potential duplicates", faster search tree building, and Hydrus calls that run alongside the search. See
 [Speed optimizations](#speed-optimizations-this-fork).
