@@ -51,6 +51,29 @@ class FailedPerceptuallyHashedFile:
 # file; 0.05 averages over roughly the last ~20 updates, so it still follows real changes but swings much less.
 TQDM_SMOOTHING = 0.05
 
+# Progress bars never get wider than this (display only). They still shrink with narrower windows and re-measure
+# the window on every refresh (dynamic_ncols). 100 fits a console on half of a 1080p screen, and keeps the bar
+# short enough that resizing the window doesn't smear old bar lines as much.
+MAX_BAR_COLS = 100
+
+
+def capped_bar_cols(width: int | None) -> int | None:
+    """The bar width to use for a console `width` columns wide (None = unknown, left to tqdm)."""
+    if width is None:
+        return None
+    return max(1, min(MAX_BAR_COLS, width))
+
+
+class ProgressBar(tqdm):
+    """tqdm with the same arguments and behavior, but at most MAX_BAR_COLS wide."""
+
+    @property
+    def format_dict(self):
+        d = super().format_dict
+        if "ncols" in d:
+            d["ncols"] = self.ncols = capped_bar_cols(d["ncols"])
+        return d
+
 # Pipelined Hydrus calls for "Finding potential duplicates" (see _find_potential_duplicates_pipelined).
 PIPELINE_DEPTH = 8  # at most this many searched files wait for their Hydrus calls
 
@@ -438,7 +461,7 @@ class HydrusVideoDeduplicator:
         """
         stats = PerceptualHashingStats()
         try:
-            with tqdm(
+            with ProgressBar(
                 smoothing=TQDM_SMOOTHING,
                 total=len(video_hashes),
                 desc="Perceptually hashing files",
@@ -554,7 +577,7 @@ class HydrusVideoDeduplicator:
             except BaseException as exc:  # reported to (and raised by) the main thread
                 failure.append(exc)
 
-        with tqdm(
+        with ProgressBar(
             smoothing=TQDM_SMOOTHING,
             dynamic_ncols=True, total=len(files), desc="Finding potential duplicates", unit="file", colour="GREEN"
         ) as pbar:
@@ -657,7 +680,7 @@ class HydrusVideoDeduplicator:
         results = self.db.execute("SELECT file_hash, phash FROM phashed_file_queue").fetchall()
         # Faster, identical tree inserts (HVD_FAST_INSERT=0 disables). See vptree.fast_tree_building.
         fast_building = vptree.fast_tree_building(self.db) if results else contextlib.nullcontext(False)
-        with fast_building as fast_insert, tqdm(
+        with fast_building as fast_insert, ProgressBar(
             smoothing=TQDM_SMOOTHING,
             total=len(results),
             desc="Building search tree",
@@ -759,7 +782,7 @@ class HydrusVideoDeduplicator:
         if send is None:
             send = self.mark_videos_as_duplicates
         num_similar_pairs = 0
-        with tqdm(
+        with ProgressBar(
             smoothing=TQDM_SMOOTHING,
             dynamic_ncols=True, total=len(files), desc="Finding potential duplicates", unit="file", colour="GREEN"
         ) as pbar:
