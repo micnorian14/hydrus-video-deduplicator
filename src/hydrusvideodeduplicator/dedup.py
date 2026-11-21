@@ -58,9 +58,9 @@ TQDM_SMOOTHING = 0.05
 MAX_BAR_COLS = 110
 
 # Display-only colours for progress bar stats (ANSI). tqdm's disp_len strips these, so the 110-col cap
-# still measures visible width. Cyan matches Rich's number style (bold cyan). Grey is softer for times/rate.
+# still measures visible width. Cyan matches Rich's number style (bold cyan). Bright yellow for times/rate.
 _BAR_CYAN = "\x1b[1;36m"
-_BAR_SOFT = "\x1b[90m"
+_BAR_YELLOW = "\x1b[93m"
 _BAR_RESET = "\x1b[0m"
 
 # Known total: "  8%|...| 62/219690 [00:06<5:56:35, 10.27file/s]"
@@ -69,15 +69,16 @@ BAR_FORMAT = (
     f"{_BAR_CYAN}{{percentage:3.0f}}%{_BAR_RESET}"
     "|{bar}| "
     f"{_BAR_CYAN}{{n_fmt}}{_BAR_RESET}/{_BAR_CYAN}{{total_fmt}}{_BAR_RESET}"
-    f" [{_BAR_SOFT}{{elapsed}}{_BAR_RESET}<{_BAR_SOFT}{{remaining}}{_BAR_RESET}, "
-    f"{_BAR_SOFT}{{rate_fmt}}{_BAR_RESET}{{postfix}}]"
+    f" [{_BAR_YELLOW}{{elapsed}}{_BAR_RESET}<{_BAR_YELLOW}{{remaining}}{_BAR_RESET}, "
+    f"{_BAR_YELLOW}{{rate_fmt}}{_BAR_RESET}{{postfix}}]"
 )
 
-# Unknown or zero total: "Building search tree: 0file [00:00, ?file/s]"
+# Unknown or zero total: "Building search tree: 0 files [00:00, ?file/s]"
+# Space + plural "files" for the count only; the rate unit stays "file/s".
 BAR_FORMAT_NO_TOTAL = (
     "{desc}: "
-    f"{_BAR_CYAN}{{n_fmt}}{_BAR_RESET}{{unit}} "
-    f"[{_BAR_SOFT}{{elapsed}}{_BAR_RESET}, {_BAR_SOFT}{{rate_fmt}}{_BAR_RESET}{{postfix}}]"
+    f"{_BAR_CYAN}{{n_fmt}}{_BAR_RESET} files "
+    f"[{_BAR_YELLOW}{{elapsed}}{_BAR_RESET}, {_BAR_YELLOW}{{rate_fmt}}{_BAR_RESET}{{postfix}}]"
 )
 
 

@@ -116,11 +116,11 @@ class TestProgressBarWidth(unittest.TestCase):
         bar.close()
         self.assertEqual(disp_len(text), 110)
         self.assertIn(dedup._BAR_CYAN, text)
-        self.assertIn(dedup._BAR_SOFT, text)
+        self.assertIn(dedup._BAR_YELLOW, text)
         self.assertIn("\x1b[32m", text)  # green bar fill (tqdm colour=GREEN)
         # Visible text is unchanged; ANSI is not counted in the width.
         plain = text.replace("\x1b[0m", "")
-        for code in (dedup._BAR_CYAN, dedup._BAR_SOFT, "\x1b[32m"):
+        for code in (dedup._BAR_CYAN, dedup._BAR_YELLOW, "\x1b[32m"):
             plain = plain.replace(code, "")
         self.assertIn("123/1000", plain)
         self.assertNotIn("\x1b[", plain)
@@ -133,12 +133,20 @@ class TestProgressBarWidth(unittest.TestCase):
         text = str(bar)
         bar.close()
         self.assertLessEqual(disp_len(text), 80)
+        # Short unknown-total line must still respect the 110-col cap on a wide console.
+        wide = io.StringIO()
+        wide_bar = dedup.ProgressBar(total=None, file=wide, ncols=200, desc="Building search tree", unit="file",
+                                    colour="GREEN", smoothing=0, mininterval=0, miniters=1)
+        wide_bar.refresh()
+        wide_text = str(wide_bar)
+        wide_bar.close()
+        self.assertLessEqual(disp_len(wide_text), dedup.MAX_BAR_COLS)
         self.assertIn(dedup._BAR_CYAN, text)
-        self.assertIn(dedup._BAR_SOFT, text)
+        self.assertIn(dedup._BAR_YELLOW, text)
         plain = text
-        for code in (dedup._BAR_CYAN, dedup._BAR_SOFT, dedup._BAR_RESET, "\x1b[32m"):
+        for code in (dedup._BAR_CYAN, dedup._BAR_YELLOW, dedup._BAR_RESET, "\x1b[32m"):
             plain = plain.replace(code, "")
-        self.assertRegex(plain, r"Building search tree: 0file \[00:00, \?file/s\]")
+        self.assertRegex(plain, r"Building search tree: 0 files \[00:00, \?file/s\]")
 
 
 if __name__ == "__main__":
