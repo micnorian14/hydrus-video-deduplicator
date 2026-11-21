@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -31,3 +32,34 @@ def print_and_log(logger: logging.Logger, msg: str, severity: Severity = logging
     """
     print(f"{severity_to_color(severity)}{msg}")
     logger.log(severity, msg)
+
+
+def display_path(path, *, windows: bool | None = None, environ=None, home: str | None = None) -> str:
+    """
+    A path for PRINTING only, with the user-specific start masked so screenshots don't show the user name.
+
+    Windows: the %LOCALAPPDATA% folder (else the %USERPROFILE% folder) is shown as %LOCALAPPDATA% / %USERPROFILE%
+    (case-insensitive). Other systems: the home folder is shown as ~. Any other path is returned unchanged.
+    Never use the result to open or create anything.
+    """
+    text = str(path)
+    if windows is None:
+        windows = os.name == "nt"
+    if environ is None:
+        environ = os.environ
+    if windows:
+        lowered = text.lower()
+        for var in ("LOCALAPPDATA", "USERPROFILE"):
+            base = (environ.get(var) or "").rstrip("\\/")
+            if len(base) < 3:  # unset, or just a drive like "C:"
+                continue
+            low_base = base.lower()
+            if lowered == low_base or lowered.startswith(low_base + "\\") or lowered.startswith(low_base + "/"):
+                return f"%{var}%" + text[len(base):]
+        return text
+    if home is None:
+        home = os.path.expanduser("~")
+    home = home.rstrip("/")
+    if home and (text == home or text.startswith(home + "/")):
+        return "~" + text[len(home):]
+    return text

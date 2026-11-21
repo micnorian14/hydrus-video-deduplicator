@@ -34,7 +34,7 @@ from hydrusvideodeduplicator.__about__ import __version__
 from hydrusvideodeduplicator.config import (
     Config,
 )
-from hydrusvideodeduplicator.dedup_util import print_and_log
+from hydrusvideodeduplicator.dedup_util import display_path, print_and_log
 from hydrusvideodeduplicator.dedup import (
     HydrusVideoDeduplicator,
     DedupeProgress,
@@ -167,7 +167,7 @@ class Worker(QObject):
         DedupeDB.set_db_dir(db_dir)
         if DedupeDB.does_db_exist():
             try:
-                print_and_log(self.logger, f"Found existing database at: '{DedupeDB.get_db_file_path()}'")
+                print_and_log(self.logger, f"Found existing database at: '{display_path(DedupeDB.get_db_file_path())}'")
                 self.db = DedupeDB.DedupeDb(DedupeDB.get_db_dir(), DedupeDB.get_db_name())
                 self.db.init_connection()
                 # Upgrade the database before doing anything.
@@ -212,7 +212,7 @@ class Worker(QObject):
                 self.db_upgrade_completed.emit(exc)
         else:
             print_and_log(
-                self.logger, f"Database not found. Creating one at '{DedupeDB.get_db_file_path()}'", logging.INFO
+                self.logger, f"Database not found. Creating one at '{display_path(DedupeDB.get_db_file_path())}'", logging.INFO
             )
             if not DedupeDB.get_db_dir().exists():
                 DedupeDB.create_db_dir()

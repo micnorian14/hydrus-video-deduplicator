@@ -21,7 +21,7 @@ from hydrusvideodeduplicator.client import (
 from hydrusvideodeduplicator.config import Config
 from hydrusvideodeduplicator.db import DedupeDB
 from hydrusvideodeduplicator.dedup import HydrusVideoDeduplicator
-from hydrusvideodeduplicator.dedup_util import print_and_log
+from hydrusvideodeduplicator.dedup_util import display_path, print_and_log
 from dotenv import find_dotenv, load_dotenv
 
 import sys
@@ -196,7 +196,7 @@ def main(
     # Deduplication
 
     if DedupeDB.does_db_exist():
-        print_and_log(logger, f"Found existing database at: '{DedupeDB.get_db_file_path()}'")
+        print_and_log(logger, f"Found existing database at: '{display_path(DedupeDB.get_db_file_path())}'")
         db = DedupeDB.DedupeDb(DedupeDB.get_db_dir(), DedupeDB.get_db_name())
         db.init_connection()
         # Upgrade the database before doing anything.
@@ -262,7 +262,7 @@ def main(
             print("[green] Cleared the search cache.")
 
     else:
-        print_and_log(logger, f"Database not found. Creating one at '{DedupeDB.get_db_file_path()}'", logging.INFO)
+        print_and_log(logger, f"Database not found. Creating one at '{display_path(DedupeDB.get_db_file_path())}'", logging.INFO)
         if not DedupeDB.get_db_dir().exists():
             DedupeDB.create_db_dir()
         db = DedupeDB.DedupeDb(DedupeDB.get_db_dir(), DedupeDB.get_db_name())
@@ -300,7 +300,7 @@ def run_main(gui: bool, is_executable: bool):
     print(f"[blue]Hydrus Video Deduplicator {__version__} [/]\n")
     if loaded_dotenv:
         # Note: This doesn't mean any values were actually loaded from the .env file.
-        print(f"Config file found: '{find_dotenv()}'")
+        print(f"Config file found: '{display_path(find_dotenv())}'")
     if gui or bool(int(config.hvd_gui)):
         try:
             from hydrusvideodeduplicator.gui.gui import gui_main
