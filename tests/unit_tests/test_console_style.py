@@ -9,7 +9,9 @@ from hydrusvideodeduplicator.dedup_util import (
     STYLE_ERROR_LABEL,
     STYLE_TIP_LABEL,
     STYLE_WARNING_LABEL,
+    should_auto_highlight,
     style_user_text,
+    user_text,
 )
 
 
@@ -73,6 +75,44 @@ class TestConsoleStyle(unittest.TestCase):
         exc = "[Errno 129] Error number -129 occurred"
         styled_exc = style_user_text(exc)
         self.assertEqual(styled_exc.plain, exc)
+
+
+
+    def test_startup_lines_keep_rich_highlighting(self):
+        # These unlabeled print_and_log startup lines used to get Rich auto-highlighting
+        # (URL blue/underline, quoted strings green, numbers cyan). user_text must restore that.
+        cases = [
+            ("Connecting to Hydrus at http://localhost:45869", "http://localhost:45869", "repr.url"),
+            ("Dedupe API version: 'v70'", "'v70'", "repr.str"),
+            ("Hydrus API version: 'v96'", "'v96'", "repr.str"),
+            (
+                "Found existing database at: '%USERPROFILE%\\AppData\\Local\\videohashes.sqlite'",
+                "'%USERPROFILE%\\AppData\\Local\\videohashes.sqlite'",
+                "repr.str",
+            ),
+            ("Database has 410776 videos already perceptually hashed.", "410776", "repr.number"),
+            ("Database filesize: 773132288 bytes.", "773132288", "repr.number"),
+        ]
+        for raw, snippet, style in cases:
+            with self.subTest(raw=raw):
+                self.assertTrue(should_auto_highlight(raw))
+                styled = user_text(raw)
+                self.assertEqual(styled.plain, raw)
+                self.assertIn((snippet, style), _span_map(styled))
+
+        # Labeled lines and lines with flags stay protected (no ReprHighlighter).
+        tip = "\nTip: You can skip perceptual hashing at any time by pressing CTRL+C.\n"
+        self.assertFalse(should_auto_highlight(tip))
+        self.assertIn(("Tip:", STYLE_TIP_LABEL), _span_map(user_text(tip)))
+        self.assertIn(("CTRL+C", STYLE_CODE), _span_map(user_text(tip)))
+        warning = dedup.SKIP_REPEAT_PAIRS_WARNING
+        self.assertFalse(should_auto_highlight(warning))
+
+        # Literal error text can opt out of highlighting; brackets stay characters.
+        exc = "[Errno 129] Error number -129 occurred"
+        styled_exc = user_text(exc, highlight=False)
+        self.assertEqual(styled_exc.plain, exc)
+        self.assertNotIn("repr.brace", [style for _, style in _span_map(styled_exc)])
 
 
 if __name__ == "__main__":

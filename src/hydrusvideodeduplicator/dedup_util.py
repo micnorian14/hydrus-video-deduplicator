@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     Severity: TypeAlias = int
 
 from rich import get_console
+from rich.highlighter import ReprHighlighter
 from rich.text import Text
 from tqdm import tqdm
 
@@ -82,14 +83,45 @@ def _style_line(line: str, default_style: str | None) -> Text:
     return out
 
 
+_REPR_HIGHLIGHTER = ReprHighlighter()
+
+
+def should_auto_highlight(s: str) -> bool:
+    """True for unlabeled lines with no magenta flags, so Rich can highlight URLs, quotes, and numbers."""
+    if CODE_TOKEN_RE.search(s):
+        return False
+    for line in s.split("\n"):
+        body = line.lstrip(" ")
+        if any(body.startswith(label) for label, _ in _LABELED_PREFIXES):
+            return False
+    return True
+
+
+def highlight_user_text(s: str, *, default_style: str | None = None) -> Text:
+    """Apply Rich's default ReprHighlighter, then an optional whole-line style (same as print('[red]' + s))."""
+    text = _REPR_HIGHLIGHTER(s)
+    if default_style:
+        text.stylize(default_style)
+    return text
+
+
+def user_text(s: str, *, default_style: str | None = None, highlight: bool | None = None) -> Text:
+    """The Text print_user would print. highlight=False for cargo labels, magenta flags, and literal error text."""
+    if highlight is None:
+        highlight = should_auto_highlight(s)
+    if highlight:
+        return highlight_user_text(s, default_style=default_style)
+    return style_user_text(s, default_style=default_style)
+
+
 def console_print(*args, highlight: bool = False, **kwargs) -> None:
     """Rich Console.print. highlight defaults to off so magenta flags and literal brackets are not restyled."""
     get_console().print(*args, highlight=highlight, **kwargs)
 
 
-def print_user(s: str, *, default_style: str | None = None) -> None:
-    """Print a styled user message without Rich auto-highlighting, so magenta flags and literal brackets stay intact."""
-    console_print(style_user_text(s, default_style=default_style), highlight=False)
+def print_user(s: str, *, default_style: str | None = None, highlight: bool | None = None) -> None:
+    """Print a styled user message. Unlabeled lines get Rich auto-highlighting; labeled/flag lines do not."""
+    console_print(user_text(s, default_style=default_style, highlight=highlight), highlight=False)
 
 
 def print_over_bar(*args, **kwargs) -> None:
@@ -127,13 +159,20 @@ class TqdmLoggingHandler(logging.StreamHandler):
             self.handleError(record)
 
 
-def print_and_log(logger: logging.Logger, msg: str, severity: Severity = logging.INFO):
+def print_and_log(
+    logger: logging.Logger,
+    msg: str,
+    severity: Severity = logging.INFO,
+    *,
+    highlight: bool | None = None,
+):
     """
     Print to the user and log. Changes print color based on the severity.
 
     The default logger uses the logging module.
     Unlabeled error/warning lines stay whole-line red/yellow; labels like WARNING: use the cargo convention.
-    Flags in the text are magenta. The logged message is unchanged.
+    Flags in the text are magenta. Unlabeled lines get Rich auto-highlighting (URLs, quotes, numbers)
+    unless highlight=False (literal error text). The logged message is unchanged.
     """
     if severity > logging.WARNING:
         default_style = STYLE_ERROR_LABEL
@@ -141,7 +180,7 @@ def print_and_log(logger: logging.Logger, msg: str, severity: Severity = logging
         default_style = STYLE_WARN_LINE
     else:
         default_style = None
-    print_user(msg, default_style=default_style)
+    print_user(msg, default_style=default_style, highlight=highlight)
     logger.log(severity, msg)
 
 
