@@ -68,7 +68,7 @@ class TestProgressBarWidth(unittest.TestCase):
         # Mid-bar prints used to land on the bar's line and wrap. external_write_mode
         # (used for hashing failure messages) clears the bar, writes the message, then redraws.
         out = io.StringIO()
-        bar = dedup.ProgressBar(total=2, file=out, ncols=50, desc="Perceptually hashing files", unit="file",
+        bar = dedup.ProgressBar(total=2, file=out, ncols=50, desc="Perceptually hashing videos", unit="video",
                                 mininterval=0, miniters=1, leave=True, smoothing=0)
         bar.refresh()
         with bar.external_write_mode(file=bar.fp):
@@ -82,7 +82,7 @@ class TestProgressBarWidth(unittest.TestCase):
                 self.assertEqual(line, "Failed to perceptually hash a file.")
         # The bar should be redrawn after the message.
         idx = lines.index("Failed to perceptually hash a file.")
-        self.assertTrue(any("Perceptually hashing files" in line for line in lines[idx + 1:]))
+        self.assertTrue(any("Perceptually hashing videos" in line for line in lines[idx + 1:]))
 
     def test_verbose_log_prints_on_their_own_line(self):
         # hydlog.info (e.g. 'Similar files found') goes to the console under --verbose.

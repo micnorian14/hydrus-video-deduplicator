@@ -624,7 +624,7 @@ If you change this value you should clear the search cache. This isn't cleared a
         elif isinstance(progress, HashingProgress):
             percentage = int((progress.complete / progress.total * 100) if progress.total > 0 else 0)
             self.progress_label.setText(
-                f"Progress: <b>Perceptually hashing files</b><br/>{progress.complete} / {progress.total} files ({percentage}%)"  # noqa: E501
+                f"Progress: <b>Perceptually hashing videos</b><br/>{progress.complete} / {progress.total} videos ({percentage}%)"  # noqa: E501
             )
         elif isinstance(progress, BuildingSearchTreeProgress):
             percentage = int((progress.complete / progress.total * 100) if progress.total > 0 else 0)

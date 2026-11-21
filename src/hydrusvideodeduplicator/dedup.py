@@ -544,9 +544,9 @@ class HydrusVideoDeduplicator:
             with ProgressBar(
                 smoothing=TQDM_SMOOTHING,
                 total=len(video_hashes),
-                desc="Perceptually hashing files",
+                desc="Perceptually hashing videos",
                 dynamic_ncols=True,
-                unit="file",
+                unit="video",
                 colour="GREEN",
             ) as pbar:
                 filehasher = FileHasher(self.client, self.job_count, self.gpu_decode)
