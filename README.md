@@ -72,8 +72,22 @@ folder, so screenshots don't show your user name.
 
 ## Speed optimizations (this fork)
 
-These are on by default. Each gives identical results, and setting it to `0` restores the original upstream code for
-that part. You only need them if you want to compare against the original or rule one out while troubleshooting.
+These were measured on one library of about 410k videos. Speeds depend on your hardware, your files and how busy
+Hydrus is, so your numbers will vary.
+
+| Step | Original 0.12.1 | This fork |
+|---|---|---|
+| Perceptually hashing videos (`--gpu-decode`, HEVC samples) | CPU decode | about 2× faster |
+| Startup check for already-hashed files | several minutes | near-instant |
+| Building search tree | 3.3–4.8 s per file | about 0.28 s per file (12–17× faster) |
+| Finding potential duplicates, tool's own search (3,000-file test copy) | 36 min 9 s | 3 min 41 s, about 10× faster |
+| Finding potential duplicates, live run (same query) | 7.66 s per file | 3.82 files per second |
+
+GPU decode was about twice as fast as CPU on HEVC samples. Downloading the next file while the current one hashes,
+and overlapping the Hydrus calls with the search, save more time on top of that.
+
+These are on by default and give identical results. You can disable them if you want to compare against the original
+or rule one out while troubleshooting.
 
 Set environment variables before running: in a `.bat` file add a line like `set HVD_PIPELINE=0` before the command,
 or in a Linux/macOS shell run `HVD_PIPELINE=0 python -m hydrusvideodeduplicator ...`.
