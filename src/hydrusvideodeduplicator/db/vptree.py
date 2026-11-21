@@ -77,6 +77,96 @@ def chain_tree_rows(perceptual_hash_ids: list[int]) -> list[tuple]:
     return rows
 
 
+def _tree_walk_order(nodes: dict, starts) -> list[int]:
+    """phash_ids reachable from `starts` via inner/outer pointers, parents before children (each id once)."""
+    order = []
+    seen = set()
+    queue = collections.deque(starts)
+    while queue:
+        node_id = queue.popleft()
+        if node_id is None or node_id in seen or node_id not in nodes:
+            continue
+        seen.add(node_id)
+        order.append(node_id)
+        node = nodes[node_id]
+        queue.append(node[2])
+        queue.append(node[4])
+    return order
+
+
+def splice_out_tree_nodes(nodes: dict, remove_ids) -> int:
+    """
+    Remove nodes from a search tree held in memory, keeping the tree valid, without any distance calculations.
+
+    nodes: {phash_id: [parent_id, radius, inner_id, inner_population, outer_id, outer_population]}, changed in place.
+    Used by --prune-deleted-files for perceptual hashes that no file uses anymore. Returns how many were removed.
+
+    The tree's own branch regeneration (_regenerate_branch / maintain_tree) is not used: it is switched off in
+    run_maintenance(), and on the chain-shaped trees this program builds it would compare almost every pair of
+    nodes in the branch. Instead each removed node X is replaced in its parent's slot:
+    * X has no children: the slot becomes empty.
+    * X has one child: that child takes X's place. Everything below X already satisfied every ancestor above X,
+      so the tree stays valid.
+    * X has two children: everything below X (minus other removed nodes) is linked into a chain in X's place,
+      the same always-valid chain that --relink-search-tree uses (see chain_tree_rows).
+    Finally the inner/outer populations are recounted for every node reachable from the root.
+    """
+    remove = {phash_id for phash_id in remove_ids if phash_id in nodes}
+    if not remove:
+        return 0
+    count_before = len(nodes)
+    roots = [phash_id for phash_id, node in nodes.items() if node[0] is None]
+    walk = _tree_walk_order(nodes, roots)
+    reached = set(walk)
+    ordered = [phash_id for phash_id in walk if phash_id in remove]  # ancestors first
+    ordered += sorted(phash_id for phash_id in remove if phash_id not in reached)
+
+    def replace_in_parent(parent_id, old_child, new_child):
+        parent = nodes.get(parent_id) if parent_id is not None else None
+        if parent is None:
+            return
+        if parent[2] == old_child:
+            parent[2] = new_child
+        elif parent[4] == old_child:
+            parent[4] = new_child
+        if parent[2] is None and parent[4] is None:
+            parent[1] = None  # a node with no children is a leaf, like the leaves add_leaf/generate_branch write
+
+    for phash_id in ordered:
+        node = nodes.get(phash_id)
+        if node is None:
+            continue  # already removed as part of an ancestor's branch
+        parent_id = node[0]
+        children = [child for child in (node[2], node[4]) if child is not None and child in nodes]
+        del nodes[phash_id]
+        if not children:
+            new_child = None
+        elif len(children) == 1:
+            new_child = children[0]
+            nodes[new_child][0] = parent_id
+        else:
+            below = _tree_walk_order(nodes, children)
+            for below_id in below:
+                if below_id in remove:
+                    del nodes[below_id]
+            kept = [below_id for below_id in below if below_id not in remove]
+            for row in chain_tree_rows(kept):
+                nodes[row[0]] = [row[1], row[2], row[3], row[4], row[5], row[6]]
+            if kept:
+                nodes[kept[0]][0] = parent_id
+            new_child = kept[0] if kept else None
+        replace_in_parent(parent_id, phash_id, new_child)
+
+    # Recount populations (children are counted before their parents).
+    size = {}
+    for node_id in reversed(_tree_walk_order(nodes, [p for p, n in nodes.items() if n[0] is None])):
+        node = nodes[node_id]
+        node[3] = size.get(node[2], 0) if node[2] is not None else 0
+        node[5] = size.get(node[4], 0) if node[4] is not None else 0
+        size[node_id] = 1 + node[3] + node[5]
+    return count_before - len(nodes)
+
+
 class TemporaryIntegerTableNameCache:
     my_instance = None
 

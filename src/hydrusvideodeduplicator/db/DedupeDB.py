@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sqlite3
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,7 +12,7 @@ from rich import print
 
 from ..__about__ import __version__
 from ..dedup_util import print_user
-from .vptree import VpTreeManager, chain_tree_rows
+from .vptree import VpTreeManager, chain_tree_rows, splice_out_tree_nodes
 
 
 dedupedblog = logging.getLogger("db")
@@ -60,6 +62,81 @@ def get_db_stats(db: DedupeDb) -> DatabaseStats:
     num_videos = db.get_num_phashed_files()
     file_size = os.path.getsize(get_db_file_path())
     return DatabaseStats(num_videos, file_size)
+
+
+# --backup: how many backups to keep, and the backup file names (e.g. videohashes.backup-20261121-013000.sqlite).
+# Only files matching exactly this name pattern are ever deleted by the cleanup of old backups.
+NUM_BACKUPS_TO_KEEP = 3
+
+
+def backup_file_pattern(db_name: str | None = None) -> re.Pattern:
+    """Regex for backup file names of db_name (default videohashes.sqlite)."""
+    stem, ext = os.path.splitext(db_name or get_db_name())
+    return re.compile(re.escape(stem) + r"\.backup-\d{8}-\d{6}" + re.escape(ext) + "$")
+
+
+def backup_db(db_path: Path | None = None, keep: int = NUM_BACKUPS_TO_KEEP) -> Path | None:
+    """
+    Copy the database next to itself as <name>.backup-YYYYMMDD-HHMMSS.sqlite (--backup).
+
+    Uses SQLite's online backup API, so the copy is consistent even if the database is open elsewhere. The copy is
+    written to a temporary name first and only renamed once complete, so a failed or interrupted backup never
+    counts as a backup. Afterwards only the newest `keep` backups are kept; older ones matching the backup name
+    pattern are deleted (no other file is touched). Returns the backup path, or None if there is no database yet.
+    """
+    db_path = Path(db_path) if db_path is not None else get_db_file_path()
+    if not db_path.is_file():
+        return None
+    stem, ext = os.path.splitext(db_path.name)
+    while True:
+        backup_path = db_path.with_name(f"{stem}.backup-{time.strftime('%Y%m%d-%H%M%S')}{ext}")
+        if not backup_path.exists():
+            break
+        time.sleep(1)  # one backup per second at most, so names never collide
+    partial_path = backup_path.with_name(backup_path.name + ".partial")
+
+    src = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
+    try:
+        dst = sqlite3.connect(partial_path)
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+    except BaseException:
+        src.close()
+        try:
+            os.remove(partial_path)
+        except OSError:
+            pass
+        raise
+    src.close()
+    os.replace(partial_path, backup_path)
+
+    pattern = backup_file_pattern(db_path.name)
+    backups = sorted(path for path in db_path.parent.iterdir() if path.is_file() and pattern.match(path.name))
+    for old in backups[: max(0, len(backups) - keep)]:
+        try:
+            os.remove(old)
+            dedupedblog.info(f"Deleted old backup {old}")
+        except OSError as exc:
+            dedupedblog.warning(f"Could not delete old backup {old}: {exc}")
+    return backup_path
+
+
+@dataclass
+class PruneResult:
+    videos: int  # distinct deleted videos removed (files table and/or phashed file queue)
+    files: int  # rows removed from the files table
+    queued: int  # rows removed from the phashed file queue
+    tree_nodes: int  # perceptual hashes removed from the search tree
+    perceptual_hashes: int  # perceptual hashes removed because no remaining file uses them
+
+
+def normalize_file_hash(file_hash) -> str:
+    """Lowercase hex string for a file hash stored as text or bytes."""
+    if isinstance(file_hash, (bytes, bytearray, memoryview)):
+        return bytes(file_hash).hex()
+    return str(file_hash).strip().lower()
 
 
 def create_db():
@@ -264,6 +341,76 @@ class DedupeDb:
             "skipped_missing_phash": broken_phash,
             "skipped_missing_file": broken_file,
         }
+
+    def prune_files_not_in(self, existing_file_hashes) -> PruneResult:
+        """
+        Remove every file that is not in existing_file_hashes (--prune-deleted-files). Run it inside a transaction.
+
+        Each removed file loses its files row, perceptual hash map rows, search cache row and phashed file queue row.
+        A perceptual hash that no remaining file uses is removed from shape_perceptual_hashes, the search tree and
+        the branch maintenance list; the tree is kept valid with vptree.splice_out_tree_nodes. Nothing else changes:
+        the remaining files keep their search cache, so already searched files are not searched again.
+        """
+        existing = {normalize_file_hash(file_hash) for file_hash in existing_file_hashes}
+
+        file_rows = self.execute("SELECT hash_id, file_hash FROM files;").fetchall()
+        gone_files = [(hash_id, file_hash) for hash_id, file_hash in file_rows if normalize_file_hash(file_hash) not in existing]  # noqa: E501
+        queue_rows = self.execute("SELECT file_hash FROM phashed_file_queue;").fetchall()
+        gone_queue = [file_hash for (file_hash,) in queue_rows if normalize_file_hash(file_hash) not in existing]
+        del file_rows, queue_rows
+        videos = len({normalize_file_hash(file_hash) for _, file_hash in gone_files} | {normalize_file_hash(file_hash) for file_hash in gone_queue})  # noqa: E501
+
+        self.execute("CREATE TEMP TABLE IF NOT EXISTS hvd_prune_hash_ids ( hash_id INTEGER PRIMARY KEY );")
+        try:
+            self.execute("DELETE FROM temp.hvd_prune_hash_ids;")
+            self.cur.executemany("INSERT INTO temp.hvd_prune_hash_ids ( hash_id ) VALUES ( ? );", [(hash_id,) for hash_id, _ in gone_files])  # noqa: E501
+            in_pruned = "hash_id IN ( SELECT hash_id FROM temp.hvd_prune_hash_ids )"
+            affected_phash_ids = {
+                phash_id for (phash_id,) in self.execute(f"SELECT DISTINCT phash_id FROM shape_perceptual_hash_map WHERE {in_pruned};")  # noqa: E501
+            }
+            self.execute(f"DELETE FROM shape_perceptual_hash_map WHERE {in_pruned};")
+            self.execute(f"DELETE FROM shape_search_cache WHERE {in_pruned};")
+            self.execute(f"DELETE FROM files WHERE {in_pruned};")
+        finally:
+            self.execute("DROP TABLE IF EXISTS temp.hvd_prune_hash_ids;")
+        self.cur.executemany("DELETE FROM phashed_file_queue WHERE file_hash = ?;", [(file_hash,) for file_hash in gone_queue])  # noqa: E501
+
+        still_used = set()
+        if affected_phash_ids:
+            still_used = {
+                phash_id
+                for (phash_id,) in self.execute("SELECT DISTINCT phash_id FROM shape_perceptual_hash_map;")
+                if phash_id in affected_phash_ids
+            }
+        orphan_phash_ids = affected_phash_ids - still_used
+
+        tree_nodes_removed = 0
+        if orphan_phash_ids:
+            rows = self.execute(
+                "SELECT phash_id, parent_id, radius, inner_id, inner_population, outer_id, outer_population FROM shape_vptree;"  # noqa: E501
+            ).fetchall()
+            before = {row[0]: row[1:] for row in rows}
+            del rows
+            nodes = {phash_id: list(values) for phash_id, values in before.items()}
+            tree_nodes_removed = splice_out_tree_nodes(nodes, orphan_phash_ids)
+            self.cur.executemany(
+                "DELETE FROM shape_vptree WHERE phash_id = ?;", [(phash_id,) for phash_id in before if phash_id not in nodes]  # noqa: E501
+            )
+            self.cur.executemany(
+                "UPDATE shape_vptree SET parent_id = ?, radius = ?, inner_id = ?, inner_population = ?, outer_id = ?, outer_population = ? WHERE phash_id = ?;",  # noqa: E501
+                [(*node, phash_id) for phash_id, node in nodes.items() if tuple(node) != before[phash_id]],
+            )
+            del before, nodes
+            self.cur.executemany("DELETE FROM shape_perceptual_hashes WHERE phash_id = ?;", [(p,) for p in orphan_phash_ids])  # noqa: E501
+            self.cur.executemany("DELETE FROM shape_maintenance_branch_regen WHERE phash_id = ?;", [(p,) for p in orphan_phash_ids])  # noqa: E501
+
+        return PruneResult(
+            videos=videos,
+            files=len(gone_files),
+            queued=len(gone_queue),
+            tree_nodes=tree_nodes_removed,
+            perceptual_hashes=len(orphan_phash_ids),
+        )
 
     def clear_search_cache(self):
         """Clear the search cache for all files."""

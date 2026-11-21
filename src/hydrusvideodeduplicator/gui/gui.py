@@ -35,6 +35,7 @@ from hydrusvideodeduplicator.config import (
     Config,
 )
 from hydrusvideodeduplicator.dedup_util import TqdmLoggingHandler, display_path, print_and_log
+from hydrusvideodeduplicator.db_tools import backup_message, prune_message, run_backup, run_prune
 from hydrusvideodeduplicator.dedup import (
     HydrusVideoDeduplicator,
     print_search_cache_warning,
@@ -80,6 +81,8 @@ class Worker(QObject):
     db_stats_completed = Signal(DedupeDB.DatabaseStats)
     reset_hydrus_potential_duplicates_completed = Signal(Exception)
     run_db_maintenance_completed = Signal(Exception, DedupeDB.DatabaseStats, DedupeDB.DatabaseStats)
+    backup_db_completed = Signal(str, Exception)
+    prune_deleted_files_completed = Signal(str, Exception)
 
     progress_updated = Signal(DedupeProgress)
 
@@ -291,6 +294,38 @@ class Worker(QObject):
             self.reset_hydrus_potential_duplicates_completed.emit(None)
 
     @Slot()
+    def backup_db(self):
+        """Same as --backup."""
+        try:
+            backup_path = run_backup()
+            self.backup_db_completed.emit(backup_message(backup_path) if backup_path else "There is no database yet.", None)  # noqa: E501
+        except Exception as exc:
+            print_and_log(self.logger, f"ERROR: Backing up the database failed: {exc}", logging.ERROR, highlight=False)
+            self.backup_db_completed.emit(None, exc)
+
+    @Slot()
+    def prune_deleted_files(self, request_params: HydrusRequestParameters):
+        """Same as --prune-deleted-files: back up, then remove videos that are no longer in Hydrus."""
+        if self.db is None:
+            raise RuntimeError("Prune deleted files was attempted, but DB was not initialized.")
+        try:
+            hvdclient = create_client(
+                request_params.local_file_service_keys,
+                request_params.api_url,
+                request_params.api_key,
+                request_params.requests_ca_bundle,
+            )
+            hvdclient.verify_permissions()
+            run_backup()
+            result = run_prune(self.db, hvdclient)
+            self.prune_deleted_files_completed.emit(
+                prune_message(result) if result is not None else "Nothing was pruned. See the console for details.", None  # noqa: E501
+            )
+        except Exception as exc:
+            print_and_log(self.logger, f"ERROR: Pruning deleted files failed: {exc}", logging.ERROR, highlight=False)
+            self.prune_deleted_files_completed.emit(None, exc)
+
+    @Slot()
     def run_db_maintenance(self):
         if self.db is None:
             raise RuntimeError("DB maintenance was attempted, but DB was not initialized.")
@@ -327,6 +362,8 @@ class MainWindow(QWidget):
     reset_hydrus_potential_duplicates_requested = Signal(HydrusRequestParameters)
     db_stats_requested = Signal()
     run_db_maintenance_requested = Signal()
+    backup_db_requested = Signal()
+    prune_deleted_files_requested = Signal(HydrusRequestParameters)
 
     def __init__(self, logger: logging.Logger, config: Config):
         super().__init__()
@@ -472,6 +509,20 @@ If you change this value you should clear the search cache. This isn't cleared a
         self.run_db_maintenance_btn.setFixedHeight(40)
         self.run_db_maintenance_btn.clicked.connect(self.run_db_maintenance_callback)
 
+        self.backup_db_btn = QPushButton("Back Up Database")
+        self.backup_db_btn.setToolTip(
+            "Copy the video dedupe database next to itself. The 3 newest backups are kept. Same as --backup."
+        )
+        self.backup_db_btn.setFixedHeight(40)
+        self.backup_db_btn.clicked.connect(self.backup_db_callback)
+
+        self.prune_deleted_files_btn = QPushButton("Prune Deleted Files")
+        self.prune_deleted_files_btn.setToolTip(
+            "Back up the database, then remove videos that are no longer in Hydrus from the video dedupe database and search tree.\nSame as --prune-deleted-files."  # noqa: E501
+        )
+        self.prune_deleted_files_btn.setFixedHeight(40)
+        self.prune_deleted_files_btn.clicked.connect(self.prune_deleted_files_callback)
+
         self.test_api_connection_btn = QPushButton("Test API Connection")
         self.test_api_connection_btn.setFixedHeight(40)
         self.test_api_connection_btn.clicked.connect(self.test_api_connection_callback)
@@ -538,6 +589,8 @@ If you change this value you should clear the search cache. This isn't cleared a
         db_buttons_layout.addWidget(self.clear_search_tree_btn, 1, 1)
         db_buttons_layout.addWidget(self.reset_hydrus_potential_duplicates_btn, 2, 0, 1, 2)
         db_buttons_layout.addWidget(self.run_db_maintenance_btn, 3, 0, 1, 2)
+        db_buttons_layout.addWidget(self.backup_db_btn, 4, 0)
+        db_buttons_layout.addWidget(self.prune_deleted_files_btn, 4, 1)
         db_buttons_layout.setColumnStretch(0, 1)
         db_buttons_layout.setColumnStretch(1, 1)
         layout.addLayout(db_buttons_layout)
@@ -565,6 +618,8 @@ If you change this value you should clear the search cache. This isn't cleared a
             self.reset_hydrus_potential_duplicates_completed
         )
         self.worker.run_db_maintenance_completed.connect(self.run_db_maintenance_completed)
+        self.worker.backup_db_completed.connect(self.backup_db_completed)
+        self.worker.prune_deleted_files_completed.connect(self.prune_deleted_files_completed)
         self.worker.progress_updated.connect(self.progress_updated_callback)
         self.worker.db_upgrade_started.connect(self.db_upgrade_started_callback)
         self.worker.db_upgrade_completed.connect(self.db_upgrade_completed_callback)
@@ -578,6 +633,8 @@ If you change this value you should clear the search cache. This isn't cleared a
         self.db_stats_requested.connect(self.worker.db_stats)
         self.reset_hydrus_potential_duplicates_requested.connect(self.worker.reset_hydrus_potential_duplicates)
         self.run_db_maintenance_requested.connect(self.worker.run_db_maintenance)
+        self.backup_db_requested.connect(self.worker.backup_db)
+        self.prune_deleted_files_requested.connect(self.worker.prune_deleted_files)
 
         self.worker.moveToThread(self.worker_thread)
 
@@ -778,6 +835,51 @@ If you change this value you should clear the search cache. This isn't cleared a
             self,
             "Database Maintenance Result",
             result_msg,
+        )
+
+    def backup_db_callback(self):
+        self.backup_db_btn.setEnabled(False)
+        self.backup_db_requested.emit()
+
+    @ignore_after_close
+    def backup_db_completed(self, result_msg: str | None, exc: Exception | None):
+        self.backup_db_btn.setEnabled(True)
+        QMessageBox.information(
+            self,
+            "Back Up Database Result",
+            result_msg if exc is None else f"Backing up the database failed.\nError: {exc}",
+        )
+
+    def prune_deleted_files_callback(self):
+        request_params = self.get_hydrus_request_params()
+
+        if len(request_params.api_key) == 0 or len(request_params.api_url) == 0:
+            QMessageBox.warning(
+                self,
+                "ERROR",
+                "You must fill in the Hydrus API URL and Hydrus API key fields first.",
+            )
+            return
+
+        confirm_btn = QMessageBox.question(
+            self,
+            "Confirm Prune Deleted Files",
+            "Remove videos that are no longer in Hydrus from your video dedupe database and search tree?\nA backup of the database is made first.",  # noqa: E501
+            buttons=QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            defaultButton=QMessageBox.StandardButton.No,
+        )
+
+        if confirm_btn == QMessageBox.StandardButton.Yes:
+            self.prune_deleted_files_btn.setEnabled(False)
+            self.prune_deleted_files_requested.emit(request_params)
+
+    @ignore_after_close
+    def prune_deleted_files_completed(self, result_msg: str | None, exc: Exception | None):
+        self.prune_deleted_files_btn.setEnabled(True)
+        QMessageBox.information(
+            self,
+            "Prune Deleted Files Result",
+            result_msg if exc is None else f"Pruning deleted files failed.\nError: {exc}",
         )
 
     def clear_search_cache_callback(self):

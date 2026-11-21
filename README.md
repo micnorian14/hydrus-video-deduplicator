@@ -36,7 +36,8 @@ See [Usage](./docs/usage.md) for how to run the program, and [FAQ](./docs/faq.md
 ## Speed optimizations (this fork)
 
 This fork makes the program do the same thing, faster. Every optimization below gives identical results and leaves
-your Hydrus and dedupe databases exactly as the original program would, except the opt-in `--skip-repeat-pairs`.
+your Hydrus and dedupe databases exactly as the original program would, except the opt-in `--skip-repeat-pairs`
+and `--prune-deleted-files`.
 Each one has an off-switch that restores the original upstream code for that part.
 
 Environment variables are set before running, e.g. in a `.bat` file add a line like `set HVD_PIPELINE=0` before the
@@ -51,6 +52,8 @@ command, or in a Linux/macOS shell run `HVD_PIPELINE=0 python -m hydrusvideodedu
 | `--skip-repeat-pairs` / `HVD_SKIP_REPEAT_PAIRS=1` | off | Sends each pair to Hydrus once per run instead of usually twice. See below. | Off: original behavior. |
 | `--gpu-decode` / `GPU_DECODE=1` | off | Decodes videos on an NVIDIA GPU while hashing (identical hashes, falls back to CPU). | Off: original CPU decoding. |
 | `--relink-search-tree` | off | One-time repair tool for a damaged search tree. See below. | Off: nothing runs. |
+| `--backup` | off | Backs up the dedupe database before the run changes it. See below. | Off: nothing runs. |
+| `--prune-deleted-files` | off | Removes videos that are no longer in Hydrus from the dedupe database. See below. | Off: nothing runs. |
 
 Always on, with no switch (no effect on results or saved data): the next file is downloaded while the current one
 is hashed, a faster check for already-hashed files, and a smoother progress bar speed/ETA (display only).
@@ -85,6 +88,34 @@ Repairs a damaged search tree: relinks every perceptual hash into one valid sear
 re-hashed), then clears the search cache so the following duplicate search checks every file again (this search
 can take a long time on big databases, and can be stopped and resumed). Back up your database first. Can't be
 combined with `--clear-search-tree`.
+
+### `--backup`
+
+Copies the dedupe database before the run changes it, into the same folder, named like
+`videohashes.backup-20261121-013000.sqlite`. The copy is made with SQLite's own backup method, so it is consistent.
+The 3 newest backups are kept and older backups with that name pattern are deleted; no other files are touched.
+Nothing happens if there is no database yet. Each backup is the size of the database. In the GUI this is the
+**Back Up Database** button.
+
+### `--prune-deleted-files`
+
+The dedupe database keeps every video it ever hashed, even after you delete the video in Hydrus. Those videos stay
+in the search tree, can still be found as matches for new videos (each one is a wasted Hydrus call), and are searched
+if they had not been searched yet. `--prune-deleted-files` removes them:
+
+- It always makes a backup first (it turns on `--backup`).
+- It asks Hydrus once for every video, gif and apng in "all local files" (read only; not limited by `--query` or
+  `--file-service-key`). Anything still in Hydrus, including the trash, is kept.
+- Every hashed video Hydrus no longer has is removed from the database, the search cache and the queue of videos
+  waiting to be added to the search tree. Perceptual hashes that no remaining video uses are removed from the search
+  tree, and the tree is relinked around them so it stays valid. Nothing is re-hashed and remaining videos keep their
+  search progress.
+- If Hydrus can't be reached or returns no videos, nothing is pruned and the run continues.
+- It is all-or-nothing: on an error or CTRL+C the database is left unchanged.
+- It prints a summary like `Pruned 5912 deleted videos from the database and 5612 entries from the search tree.`
+- The database format does not change, so the pruned database still works with older versions of the program.
+
+It runs at startup, before perceptual hashing. In the GUI this is the **Prune Deleted Files** button.
 
 ## Python Install
 

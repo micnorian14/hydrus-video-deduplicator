@@ -120,6 +120,21 @@ class HVDClient:
         )["hashes"]
         return all_video_hashes
 
+    def get_all_video_hashes_in_hydrus(self) -> list[str]:
+        """
+        Hashes of every video, gif and apng Hydrus still has (read only), for --prune-deleted-files.
+
+        Searches "all local files" (it includes every local file domain and the trash), not the --query or
+        --file-service-key of this run, so a video is only treated as deleted when Hydrus no longer has it at all.
+        """
+        all_local_files = self.get_default_file_service_keys()
+        return self.client.search_files(
+            tags=["system:filetype=video, gif, apng"],
+            file_service_keys=all_local_files,
+            return_hashes=True,
+            return_file_ids=False,
+        )["hashes"]
+
     def reset_potential_duplicates(self, file_hashes: Iterable[str]):
         """
         Remove the potential duplicate status for the provided file hashes in Hydrus.

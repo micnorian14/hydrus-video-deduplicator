@@ -82,4 +82,19 @@ See [Speed optimizations (this fork)](../README.md#speed-optimizations-this-fork
 switch and its default, the speed tips for "Finding potential duplicates", `--relink-search-tree`, and the
 warning about clearing or resyncing potential duplicates in Hydrus.
 
+### `--backup` and `--prune-deleted-files`
+
+Both are off by default.
+
+- `--backup` copies the dedupe database next to itself before the run changes it, and keeps the 3 newest backups.
+- `--prune-deleted-files` removes videos you have deleted in Hydrus from the dedupe database and search tree. It
+  makes a backup first.
+
+```sh
+python -m hydrusvideodeduplicator --api-key="..." --prune-deleted-files
+```
+
+See [`--backup`](../README.md#--backup) and [`--prune-deleted-files`](../README.md#--prune-deleted-files) in the
+README for details.
+
 > ⚠️ **WARNING**: If you clear or resync potential duplicates in Hydrus (**"delete all potential duplicate pairs and re-search"** or **"resync potential duplicate pairs to storage"**), you will have to clear this tool's search cache (`--clear-search-cache`) and re-search every video from zero, which can take DAYS on a large library.

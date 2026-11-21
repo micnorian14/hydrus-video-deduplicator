@@ -20,6 +20,7 @@ from hydrusvideodeduplicator.client import (
 )
 from hydrusvideodeduplicator.config import Config
 from hydrusvideodeduplicator.db import DedupeDB
+from hydrusvideodeduplicator.db_tools import run_backup, run_prune
 from hydrusvideodeduplicator.dedup import HydrusVideoDeduplicator, print_search_cache_warning
 from hydrusvideodeduplicator.dedup_util import TqdmLoggingHandler, display_path, print_and_log
 from dotenv import find_dotenv, load_dotenv
@@ -83,6 +84,18 @@ def main(
         Optional[bool],
         typer.Option(
             help="Clear the search cache that tracks what files have been compared with a given similarity threshold."
+        ),
+    ] = False,
+    backup: Annotated[
+        Optional[bool],
+        typer.Option(
+            help="Back up the dedupe database before this run changes it. Keeps the 3 newest backups next to the database."  # noqa: E501
+        ),
+    ] = False,
+    prune_deleted_files: Annotated[
+        Optional[bool],
+        typer.Option(
+            help="Remove videos that are no longer in Hydrus from the dedupe database and search tree. Turns on --backup."  # noqa: E501
         ),
     ] = False,
     failed_page_name: Annotated[
@@ -199,8 +212,18 @@ def main(
 
     # Deduplication
 
+    if prune_deleted_files:
+        backup = True  # pruning always backs up first
+
     if DedupeDB.does_db_exist():
         print_and_log(logger, f"Found existing database at: '{display_path(DedupeDB.get_db_file_path())}'")
+        if backup:
+            # Before anything (including a database upgrade) changes the database.
+            try:
+                run_backup()
+            except Exception as exc:
+                print_and_log(logger, f"ERROR: Backing up the database failed: {exc}", logging.ERROR, highlight=False)
+                exit_from_failure()
         db = DedupeDB.DedupeDb(DedupeDB.get_db_dir(), DedupeDB.get_db_name())
         db.init_connection()
         # Upgrade the database before doing anything.
@@ -237,6 +260,9 @@ def main(
             f"Database filesize: {db_stats.file_size} bytes.",
         )
         print_search_cache_warning()
+
+        if prune_deleted_files:
+            run_prune(db, hvdclient)
 
         if clear_search_tree:
             db.begin_transaction()
