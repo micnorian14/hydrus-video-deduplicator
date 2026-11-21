@@ -311,7 +311,7 @@ class HydrusVideoDeduplicator:
             custom_query = [x for x in custom_query if x.strip()]
             if len(custom_query) > 0:
                 search_tags.extend(custom_query)
-                print(f"[yellow]Custom Query: {custom_query}")
+                print(f"[blue]Custom Query: {custom_query}")
         return search_tags
 
     def deduplicate(
@@ -332,12 +332,12 @@ class HydrusVideoDeduplicator:
         num_similar_pairs = 0
 
         if skip_hashing:
-            print("[yellow]Skipping perceptual hashing")
+            print("[blue]Skipping perceptual hashing")
         else:
             video_hashes = list(self.client.get_video_hashes(self.search_tags))
             video_hashes = self.filter_unhashed(video_hashes)
             print(f"[blue]Found {len(video_hashes)} eligible files to perceptually hash.")
-            print("\nTip: You can skip perceptual hashing at any time by pressing CTRL+C.\n")
+            print("[cyan]\nTip: You can skip perceptual hashing at any time by pressing CTRL+C.\n")
             self.hydlog.info("Starting perceptual hash processing")
             self.db.begin_transaction()
             with self.db.conn:
@@ -368,14 +368,14 @@ class HydrusVideoDeduplicator:
                                 f"[yellow]{stats.failed_from_phash_count} failures were from an error during perceptual hashing. Are the files corrupted?"  # noqa: E501
                             )
                             print(
-                                "\nTip: You could have seen which files failed directly in Hydrus by "
+                                "[cyan]\nTip: You could have seen which files failed directly in Hydrus by "
                                 "creating a Hydrus page with the name 'failed' and "
                                 "running the program with '--failed-page-name=failed'\n"
                             )
                     print(f"[green]Added {stats.success_hash_count} new perceptual hashes to the database.")
 
         # Insert the perceptual hashed files into the vptree.
-        print("\nTip: You can skip building the search tree at any time by pressing CTRL+C.\n")
+        print("[cyan]\nTip: You can skip building the search tree at any time by pressing CTRL+C.\n")
         self.db.begin_transaction()
         with self.db.conn:
             try:
@@ -400,7 +400,7 @@ class HydrusVideoDeduplicator:
         #       while this is running.
         pre_dedupe_count = self.client.get_potential_duplicate_count_hydrus()
 
-        print("\nTip: You can skip finding potential duplicates at any time by pressing CTRL+C.\n")
+        print("[cyan]\nTip: You can skip finding potential duplicates at any time by pressing CTRL+C.\n")
         self.db.begin_transaction()
         with self.db.conn:
             try:
@@ -444,7 +444,7 @@ class HydrusVideoDeduplicator:
                 desc="Perceptually hashing files",
                 dynamic_ncols=True,
                 unit="file",
-                colour="BLUE",
+                colour="GREEN",
             ) as pbar:
                 filehasher = FileHasher(self.client, self.job_count, self.gpu_decode)
                 successful_phashed_count = 0
@@ -472,12 +472,12 @@ class HydrusVideoDeduplicator:
                             if isinstance(result.exc, HydrusApiException):
                                 stats.failed_from_api_errors_count += 1
                                 print("[red]Hydrus API error during perceptual hashing:")
-                                print(f"{result.exc}")
+                                print(Text(str(result.exc), style="red"))
                             else:
                                 stats.failed_from_phash_count += 1
                                 print("[red]Failed to perceptually hash a file.")
-                                print(f"Failed file SHA256 hash: {result.file_hash}")
-                                print(f"{result.exc}")
+                                print(f"[red]Failed file SHA256 hash: {result.file_hash}")
+                                print(Text(str(result.exc), style="red"))
                                 if self.page_logger:
                                     self.page_logger.add_failed_video(result.file_hash)
                         else:
@@ -663,7 +663,7 @@ class HydrusVideoDeduplicator:
             desc="Building search tree",
             dynamic_ncols=True,
             unit="file",
-            colour="CYAN",
+            colour="GREEN",
         ) as pbar:
             if fast_insert:
                 pbar.write("Using fast search tree building.")
@@ -738,9 +738,10 @@ class HydrusVideoDeduplicator:
             # Opt-in, see RepeatPairSkipper. With it off, `send` is exactly the original call.
             skipper = RepeatPairSkipper(send)
             send = skipper
-            # First line yellow, the WARNING lines bold red so they stand out; display only
+            # First line blue (info); in the warning only the word "WARNING:" is bold yellow; display only
             first_line, _, warning_lines = SKIP_REPEAT_PAIRS_WARNING.partition("\n")
-            print(Text.assemble((first_line, "yellow"), "\n", (warning_lines, "bold red")))
+            _, _, warning_rest = warning_lines.partition("WARNING:")
+            print(Text.assemble((first_line, "blue"), "\n", ("WARNING:", "bold yellow"), warning_rest))
         try:
             if len(files) > 0 and pipeline_enabled():
                 print("[blue] Using pipelined Hydrus calls.")
@@ -749,7 +750,7 @@ class HydrusVideoDeduplicator:
         finally:
             if skipper is not None:
                 print(
-                    f"[yellow]Skipped {skipper.skipped} repeat pair sends "
+                    f"[blue]Skipped {skipper.skipped} repeat pair sends "
                     "(each of those pairs had already been sent to Hydrus in this run)."
                 )
 
