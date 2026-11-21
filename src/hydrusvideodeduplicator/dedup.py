@@ -52,9 +52,9 @@ class FailedPerceptuallyHashedFile:
 TQDM_SMOOTHING = 0.05
 
 # Progress bars never get wider than this (display only). They still shrink with narrower windows and re-measure
-# the window on every refresh (dynamic_ncols). 100 fits a console on half of a 1080p screen, and keeps the bar
+# the window on every refresh (dynamic_ncols). 110 fits a console on half of a 1080p screen, and keeps the bar
 # short enough that resizing the window doesn't smear old bar lines as much.
-MAX_BAR_COLS = 100
+MAX_BAR_COLS = 110
 
 
 def capped_bar_cols(width: int | None) -> int | None:
@@ -494,13 +494,17 @@ class HydrusVideoDeduplicator:
                             # We only want to add the failure to the page if the file was the actual cause of failure.
                             if isinstance(result.exc, HydrusApiException):
                                 stats.failed_from_api_errors_count += 1
-                                print("[red]Hydrus API error during perceptual hashing:")
-                                print(Text(str(result.exc), style="red"))
+                                # Clear the bar first so these lines start on their own line, then redraw the bar below.
+                                # file=pbar.fp makes this work for the console and for tests that capture the bar.
+                                with pbar.external_write_mode(file=pbar.fp):
+                                    print("[red]Hydrus API error during perceptual hashing:")
+                                    print(Text(str(result.exc), style="red"))
                             else:
                                 stats.failed_from_phash_count += 1
-                                print("[red]Failed to perceptually hash a file.")
-                                print(f"[red]Failed file SHA256 hash: {result.file_hash}")
-                                print(Text(str(result.exc), style="red"))
+                                with pbar.external_write_mode(file=pbar.fp):
+                                    print("[red]Failed to perceptually hash a file.")
+                                    print(f"[red]Failed file SHA256 hash: {result.file_hash}")
+                                    print(Text(str(result.exc), style="red"))
                                 if self.page_logger:
                                     self.page_logger.add_failed_video(result.file_hash)
                         else:

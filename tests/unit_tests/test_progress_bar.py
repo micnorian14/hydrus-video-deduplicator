@@ -10,8 +10,9 @@ from hydrusvideodeduplicator import dedup
 
 class TestProgressBarWidth(unittest.TestCase):
     def test_capped_bar_cols(self):
-        self.assertEqual(dedup.MAX_BAR_COLS, 100)
-        self.assertEqual(dedup.capped_bar_cols(250), 100)
+        self.assertEqual(dedup.MAX_BAR_COLS, 110)
+        self.assertEqual(dedup.capped_bar_cols(250), 110)
+        self.assertEqual(dedup.capped_bar_cols(110), 110)
         self.assertEqual(dedup.capped_bar_cols(100), 100)
         self.assertEqual(dedup.capped_bar_cols(79), 79)  # narrower windows still shrink the bar
         self.assertEqual(dedup.capped_bar_cols(0), 1)
@@ -27,7 +28,7 @@ class TestProgressBarWidth(unittest.TestCase):
         return disp_len(text)  # visible width, without the colour codes
 
     def test_bar_never_wider_than_cap(self):
-        self.assertEqual(self._render(200), 100)
+        self.assertEqual(self._render(200), 110)
         self.assertEqual(self._render(60), 60)
 
     def test_dynamic_width_is_capped_each_refresh(self):
@@ -37,13 +38,44 @@ class TestProgressBarWidth(unittest.TestCase):
         bar.dynamic_ncols = lambda fp: (widths.pop(0) if widths else 80, 24)  # simulate the window being resized
         got = [bar.format_dict["ncols"] for _ in range(3)]
         bar.close()
-        self.assertEqual(got, [100, 70, 100])
+        self.assertEqual(got, [110, 70, 110])
 
     def test_same_arguments_as_tqdm(self):
         bar = dedup.ProgressBar(total=5, file=io.StringIO(), dynamic_ncols=True, smoothing=dedup.TQDM_SMOOTHING,
                                 colour="GREEN", unit="file", desc="x")
         self.assertEqual((bar.smoothing, bar.colour, bar.unit, bar.desc), (dedup.TQDM_SMOOTHING, "GREEN", "file", "x"))
         bar.close()
+
+    @staticmethod
+    def _visible_lines(s: str) -> list[str]:
+        # tqdm uses carriage return to clear and redraw; apply those overwrites like a terminal would.
+        lines = []
+        for line in s.split("\n"):
+            cur = ""
+            for part in line.split("\r"):
+                cur = part + cur[len(part):]
+            lines.append(cur)
+        return lines
+
+    def test_messages_print_on_their_own_line(self):
+        # Mid-bar prints used to land on the bar's line and wrap. external_write_mode
+        # (used for hashing failure messages) clears the bar, writes the message, then redraws.
+        out = io.StringIO()
+        bar = dedup.ProgressBar(total=2, file=out, ncols=50, desc="Perceptually hashing files", unit="file",
+                                mininterval=0, miniters=1, leave=True, smoothing=0)
+        bar.refresh()
+        with bar.external_write_mode(file=bar.fp):
+            bar.fp.write("Failed to perceptually hash a file.\n")
+        lines = [line.rstrip() for line in self._visible_lines(out.getvalue())]
+        bar.close()
+        self.assertIn("Failed to perceptually hash a file.", lines)
+        # The message must not be glued to the end of a bar line.
+        for line in lines:
+            if "Failed to perceptually hash a file." in line:
+                self.assertEqual(line, "Failed to perceptually hash a file.")
+        # The bar should be redrawn after the message.
+        idx = lines.index("Failed to perceptually hash a file.")
+        self.assertTrue(any("Perceptually hashing files" in line for line in lines[idx + 1:]))
 
 
 if __name__ == "__main__":
