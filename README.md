@@ -33,6 +33,59 @@ For macos, see the [Python Install](#python-install).
 
 See [Usage](./docs/usage.md) for how to run the program, and [FAQ](./docs/faq.md) for more information.
 
+## Speed optimizations (this fork)
+
+This fork makes the program do the same thing, faster. Every optimization below gives identical results and leaves
+your Hydrus and dedupe databases exactly as the original program would, except the opt-in `--skip-repeat-pairs`
+(read its warning). Each one has an off-switch that restores the original upstream code for that part.
+
+Environment variables are set before running, e.g. in a `.bat` file add a line like `set HVD_PIPELINE=0` before the
+command, or in a Linux/macOS shell run `HVD_PIPELINE=0 python -m hydrusvideodeduplicator ...`.
+
+| Switch | Default | What it does | What the off value restores |
+|---|---|---|---|
+| `HVD_FAST_SEARCH` | `1` (on) | Exact in-memory distance index for "Finding potential duplicates". Falls back automatically if it can't be used. | `0`: original distance calculation (also turns off `HVD_SCAN_SEARCH`). |
+| `HVD_SCAN_SEARCH` | `1` (on) | Skips the part of the search tree walk that is the same for every file. | `0`: original tree walk. |
+| `HVD_PIPELINE` | `1` (on) | Searches the next files while Hydrus handles the current file's pairs (same calls, same order). | `0`: original one-file-at-a-time loop. |
+| `HVD_FAST_INSERT` | `1` (on) | Faster "Building search tree", identical tree. | `0`: original tree inserts. |
+| `--skip-repeat-pairs` / `HVD_SKIP_REPEAT_PAIRS=1` | off | Sends each pair to Hydrus once per run instead of usually twice. See below. | Off: original behavior. |
+| `--gpu-decode` / `GPU_DECODE=1` | off | Decodes videos on an NVIDIA GPU while hashing (identical hashes, falls back to CPU). | Off: original CPU decoding. |
+| `--relink-search-tree` | off | One-time repair tool for a damaged search tree. See below. | Off: nothing runs. |
+
+Always on, with no switch (no effect on results or saved data): the next file is downloaded while the current one
+is hashed, a faster check for already-hashed files, and a smoother progress bar speed/ETA (display only).
+
+### Speed tips for "Finding potential duplicates"
+
+Hydrus does the heavy lifting in this step. For best speed while it runs:
+
+- Close any Hydrus duplicates pages (they recount pairs as they arrive).
+- Pause duplicate auto-resolution rules.
+- Pause Hydrus idle/background maintenance.
+- Optional: pause active downloads and subscriptions.
+
+The program prints these tips at the start of the step.
+
+### `--skip-repeat-pairs`
+
+Most potential duplicate pairs are found twice during the search, once from each file's side, and by default each
+time is sent to Hydrus. Hydrus stores the pair the same way both times, so the second send changes nothing.
+`--skip-repeat-pairs` (or the environment variable `HVD_SKIP_REPEAT_PAIRS=1`) sends each pair only once per run,
+which cuts the number of Hydrus API calls while finding potential duplicates. It is off by default.
+
+- A pair is skipped only if that exact pair was already sent successfully earlier in the same run.
+- Nothing is saved differently: the dedupe database is not changed, and Hydrus ends up with the same pairs.
+- Downloads, subscriptions and duplicate auto-resolution can keep running in Hydrus while it runs.
+
+> ⚠️ **WARNING**: Do NOT use **"delete all potential duplicate pairs and re-search"** or **"resync potential duplicate pairs to storage"** in Hydrus while this runs. If you do, you will have to clear this tool's search cache (`--clear-search-cache`) and re-search every video from zero, which can take DAYS on a large library.
+
+### `--relink-search-tree`
+
+Repairs a damaged search tree: relinks every perceptual hash into one valid search tree (takes seconds, nothing is
+re-hashed), then clears the search cache so the following duplicate search checks every file again (this search
+can take a long time on big databases, and can be stopped and resumed). Back up your database first. Can't be
+combined with `--clear-search-tree`.
+
 ## Python Install
 
 > **Note**: Windows users do not need the Python install. Download the exe as described in [Installation](#installation) instead.

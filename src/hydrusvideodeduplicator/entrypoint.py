@@ -44,25 +44,8 @@ config = Config.load_from_env()
 CLI_HELP = "Find potential duplicate videos in Hydrus and mark them as potential duplicates for manual review."
 CLI_EPILOG = "\n\n".join(
     [
-"Speed optimizations and their off-switches. Results are identical with every switch on or off, "
-"except --skip-repeat-pairs (see its warning above). Environment variables are set before running, "
-"e.g. in a .bat file add a line like: set HVD_PIPELINE=0",
-        'HVD_FAST_SEARCH (default 1, on): exact in-memory distance index for "Finding potential duplicates". '
-"0 = original upstream distance calculation. Also switches off HVD_SCAN_SEARCH.",
-"HVD_SCAN_SEARCH (default 1, on): skips the part of the search tree walk that is the same for every "
-"file. 0 = original upstream tree walk.",
-        "HVD_PIPELINE (default 1, on): searches the next files while Hydrus handles the current file's pairs "
-"(same calls, same order). 0 = original upstream one-file-at-a-time loop.",
-        'HVD_FAST_INSERT (default 1, on): faster "Building search tree" with an identical tree. 0 = original '
-"upstream tree inserts.",
-"--skip-repeat-pairs or HVD_SKIP_REPEAT_PAIRS=1 (default 0, OFF): send each pair to Hydrus once per "
-"run. Off = original upstream behavior.",
-"--gpu-decode or GPU_DECODE=1 (default off): decode videos on an NVIDIA GPU while hashing (identical "
-"hashes, falls back to CPU). Off = original upstream CPU decoding.",
-"--relink-search-tree (default off): one-time repair tool, only runs when you ask for it.",
-"Always on, no switch needed (no effect on results or saved data): the next file is downloaded while "
-"the current one is hashed, a faster check for already-hashed files, and a smoother progress bar "
-"speed/ETA (display only).",
+        "Speed switches (environment variables; set to 0 to use the original upstream code; details in README.md):",
+        "HVD_FAST_SEARCH=1  HVD_SCAN_SEARCH=1  HVD_PIPELINE=1  HVD_FAST_INSERT=1",
     ]
 )
 
@@ -93,10 +76,7 @@ def main(
     relink_search_tree: Annotated[
         Optional[bool],
         typer.Option(
-            help="Repair a damaged search tree: relink every perceptual hash into one valid search tree (takes "
-            "seconds, nothing is re-hashed), then clear the search cache so the following duplicate search checks "
-            "every file again (this search can take a long time on big databases, and can be stopped and resumed). "
-            "Back up your database first. Can't be combined with --clear-search-tree."
+            help="Repair a damaged search tree (one-time; see README). Back up your database first."
         ),
     ] = False,
     clear_search_cache: Annotated[
@@ -119,13 +99,8 @@ def main(
     skip_repeat_pairs: Annotated[
         Optional[bool],
         typer.Option(
-            help="Faster duplicate search: send each potential duplicate pair to Hydrus once per run instead of "
-            "twice (the second send changes nothing in Hydrus). Off by default. Can also be turned on with the "
-            "environment variable HVD_SKIP_REPEAT_PAIRS=1. "
-            "WARNING: Do NOT use \"delete all potential duplicate pairs and re-search\" or \"resync potential "
-            "duplicate pairs to storage\" in Hydrus while this runs. If you do, you will have to clear this tool's "
-            "search cache (--clear-search-cache) and re-search every video from zero, which can take DAYS on a "
-            "large library."
+            help="Send each pair to Hydrus once per run instead of twice (faster). "
+            "WARNING: see README before using."
         ),
     ] = False,
     dedup_database_dir: Annotated[
