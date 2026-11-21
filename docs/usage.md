@@ -79,8 +79,9 @@ python -m hydrusvideodeduplicator --api-key="..." --query="character:batman"
 ### Speed optimizations, speed tips and `--skip-repeat-pairs`
 
 See [Speed optimizations (this fork)](../README.md#speed-optimizations-this-fork) in the README for every speed
-switch and its default, the speed tips for "Finding potential duplicates", `--relink-search-tree`, and the
-warning about clearing or resyncing potential duplicates in Hydrus.
+switch and its default, the speed tips for "Finding potential duplicates", and the warning about clearing or
+resyncing potential duplicates in Hydrus. See [New flags](../README.md#new-flags) for how each new flag works,
+including `--skip-repeat-pairs`, `--gpu-decode` and `--relink-search-tree`.
 
 ### `--backup` and `--prune-deleted-files`
 
