@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 import unittest
 
 from tqdm.utils import disp_len
@@ -48,14 +49,18 @@ class TestProgressBarWidth(unittest.TestCase):
         self.assertEqual((bar.smoothing, bar.colour, bar.unit, bar.desc), (dedup.TQDM_SMOOTHING, "GREEN", "file", "x"))
         bar.close()
 
-    @staticmethod
-    def _visible_lines(s: str) -> list[str]:
-        # tqdm uses carriage return to clear and redraw; apply those overwrites like a terminal would.
+    _ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+    @classmethod
+    def _visible_lines(cls, s: str) -> list[str]:
+        # tqdm uses carriage return to clear and redraw. ANSI has zero width, so strip it
+        # before applying overwrites the way a terminal would.
         lines = []
         for line in s.split("\n"):
             cur = ""
             for part in line.split("\r"):
-                cur = part + cur[len(part):]
+                vis = cls._ANSI.sub("", part)
+                cur = vis + cur[len(vis):]
             lines.append(cur)
         return lines
 
@@ -101,6 +106,39 @@ class TestProgressBarWidth(unittest.TestCase):
         self.assertNotIn("Finding potential duplicates", found[0])
         idx = lines.index(found[0])
         self.assertTrue(any("Finding potential duplicates" in line for line in lines[idx + 1:]))
+
+    def test_bar_stats_are_coloured(self):
+        out = io.StringIO()
+        bar = dedup.ProgressBar(total=1000, file=out, ncols=110, desc="Finding potential duplicates", unit="file",
+                                colour="GREEN", smoothing=0, mininterval=0, miniters=1)
+        bar.update(123)
+        text = str(bar)
+        bar.close()
+        self.assertEqual(disp_len(text), 110)
+        self.assertIn(dedup._BAR_CYAN, text)
+        self.assertIn(dedup._BAR_SOFT, text)
+        self.assertIn("\x1b[32m", text)  # green bar fill (tqdm colour=GREEN)
+        # Visible text is unchanged; ANSI is not counted in the width.
+        plain = text.replace("\x1b[0m", "")
+        for code in (dedup._BAR_CYAN, dedup._BAR_SOFT, "\x1b[32m"):
+            plain = plain.replace(code, "")
+        self.assertIn("123/1000", plain)
+        self.assertNotIn("\x1b[", plain)
+
+    def test_unknown_total_bar_stats_are_coloured(self):
+        out = io.StringIO()
+        bar = dedup.ProgressBar(total=None, file=out, ncols=80, desc="Building search tree", unit="file",
+                                colour="GREEN", smoothing=0, mininterval=0, miniters=1)
+        bar.refresh()
+        text = str(bar)
+        bar.close()
+        self.assertLessEqual(disp_len(text), 80)
+        self.assertIn(dedup._BAR_CYAN, text)
+        self.assertIn(dedup._BAR_SOFT, text)
+        plain = text
+        for code in (dedup._BAR_CYAN, dedup._BAR_SOFT, dedup._BAR_RESET, "\x1b[32m"):
+            plain = plain.replace(code, "")
+        self.assertRegex(plain, r"Building search tree: 0file \[00:00, \?file/s\]")
 
 
 if __name__ == "__main__":

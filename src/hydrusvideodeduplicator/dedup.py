@@ -57,6 +57,29 @@ TQDM_SMOOTHING = 0.05
 # short enough that resizing the window doesn't smear old bar lines as much.
 MAX_BAR_COLS = 110
 
+# Display-only colours for progress bar stats (ANSI). tqdm's disp_len strips these, so the 110-col cap
+# still measures visible width. Cyan matches Rich's number style (bold cyan). Grey is softer for times/rate.
+_BAR_CYAN = "\x1b[1;36m"
+_BAR_SOFT = "\x1b[90m"
+_BAR_RESET = "\x1b[0m"
+
+# Known total: "  8%|...| 62/219690 [00:06<5:56:35, 10.27file/s]"
+BAR_FORMAT = (
+    "{desc}: "
+    f"{_BAR_CYAN}{{percentage:3.0f}}%{_BAR_RESET}"
+    "|{bar}| "
+    f"{_BAR_CYAN}{{n_fmt}}{_BAR_RESET}/{_BAR_CYAN}{{total_fmt}}{_BAR_RESET}"
+    f" [{_BAR_SOFT}{{elapsed}}{_BAR_RESET}<{_BAR_SOFT}{{remaining}}{_BAR_RESET}, "
+    f"{_BAR_SOFT}{{rate_fmt}}{_BAR_RESET}{{postfix}}]"
+)
+
+# Unknown or zero total: "Building search tree: 0file [00:00, ?file/s]"
+BAR_FORMAT_NO_TOTAL = (
+    "{desc}: "
+    f"{_BAR_CYAN}{{n_fmt}}{_BAR_RESET}{{unit}} "
+    f"[{_BAR_SOFT}{{elapsed}}{_BAR_RESET}, {_BAR_SOFT}{{rate_fmt}}{_BAR_RESET}{{postfix}}]"
+)
+
 
 def capped_bar_cols(width: int | None) -> int | None:
     """The bar width to use for a console `width` columns wide (None = unknown, left to tqdm)."""
@@ -66,13 +89,19 @@ def capped_bar_cols(width: int | None) -> int | None:
 
 
 class ProgressBar(tqdm):
-    """tqdm with the same arguments and behavior, but at most MAX_BAR_COLS wide."""
+    """tqdm with the same arguments and behavior, but at most MAX_BAR_COLS wide, with coloured stats."""
+
+    def __init__(self, *args, **kwargs):
+        self._style_bar_stats = "bar_format" not in kwargs
+        super().__init__(*args, **kwargs)
 
     @property
     def format_dict(self):
         d = super().format_dict
         if "ncols" in d:
             d["ncols"] = self.ncols = capped_bar_cols(d["ncols"])
+        if getattr(self, "_style_bar_stats", False):
+            d["bar_format"] = BAR_FORMAT if d.get("total") else BAR_FORMAT_NO_TOTAL
         return d
 
 # Pipelined Hydrus calls for "Finding potential duplicates" (see _find_potential_duplicates_pipelined).
@@ -749,17 +778,35 @@ class HydrusVideoDeduplicator:
             {"threshold": search_threshold},
         ).fetchall()
 
+        # Display-only spacing: blank line between sections, no leading spaces on "Using ..." lines,
+        # and the pipelined line is grouped with the other Using lines (print order only).
+        need_gap = False
+
+        def _section_gap():
+            nonlocal need_gap
+            if need_gap:
+                print()
+            need_gap = True
+
         if len(files) > 0:
             # "Speed tips:" is bold cyan; the rest of that line and the bullet lines are plain; display only
             print_user(SPEED_TIPS)
+            need_gap = True
 
         # Speed up the search with an exact in-memory distance index (falls back to the original code if it
         # can't be built, or if HVD_FAST_SEARCH=0). The tree isn't modified during this phase.
+        printed_using = False
         if len(files) > 0 and tree.enable_fast_search_index():
-            print("[blue] Using fast search index.")
+            _section_gap()
+            printed_using = True
+            print("[blue]Using fast search index.")
             # Skip the part of the tree walk every search takes identically (HVD_SCAN_SEARCH=0 disables).
             if tree.enable_fast_search_scan():
-                print("[blue] Using fast search scan.")
+                print("[blue]Using fast search scan.")
+        if len(files) > 0 and pipeline_enabled():
+            if not printed_using:
+                _section_gap()
+            print("[blue]Using pipelined Hydrus calls.")
 
         send = self.mark_videos_as_duplicates
         skipper = None
@@ -768,11 +815,16 @@ class HydrusVideoDeduplicator:
             skipper = RepeatPairSkipper(send)
             send = skipper
             # First line blue (info); only the word "WARNING:" is red3 (not bold); flags are magenta; display only
+            _section_gap()
             first_line, _, warning_lines = SKIP_REPEAT_PAIRS_WARNING.partition("\n")
-            console_print(Text.assemble((first_line, "blue"), "\n", style_user_text(warning_lines)), highlight=False)
+            console_print(Text(first_line, style="blue"), highlight=False)
+            print()
+            console_print(style_user_text(warning_lines), highlight=False)
+            need_gap = True
+
+        _section_gap()  # blank line before the progress bar when any of the sections above printed
         try:
             if len(files) > 0 and pipeline_enabled():
-                print("[blue] Using pipelined Hydrus calls.")
                 return self._find_potential_duplicates_pipelined(tree, files, search_threshold, send)
             return self._find_potential_duplicates_serial(tree, files, search_threshold, send)
         finally:
