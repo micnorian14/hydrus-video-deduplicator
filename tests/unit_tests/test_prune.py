@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import os
 import random
-import sqlite3
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -99,7 +97,10 @@ class TestPruneDeletedFiles(unittest.TestCase):
             gone.discard(db.get_hash_id(f"{3:064x}"))
             before = _searches(db, sorted(files))
             cache_before = dict(db.execute("SELECT hash_id, searched_distance FROM shape_search_cache;").fetchall())
-            existing = [files[h].upper() for h in files if h not in gone] + ["cd" * 32, "ef" * 32]  # case must not matter  # noqa: E501
+            existing = [files[h].upper() for h in files if h not in gone] + [
+                "cd" * 32,
+                "ef" * 32,
+            ]  # case must not matter
 
             db.begin_transaction()
             with db.conn:
@@ -114,12 +115,22 @@ class TestPruneDeletedFiles(unittest.TestCase):
             self.assertEqual(queue, ["cd" * 32])
             cache_after = dict(db.execute("SELECT hash_id, searched_distance FROM shape_search_cache;").fetchall())
             self.assertEqual(cache_after, {h: d for h, d in cache_before.items() if h not in gone})
-            self.assertEqual(db.execute("SELECT COUNT(*) FROM shape_perceptual_hash_map WHERE hash_id NOT IN (SELECT hash_id FROM files);").fetchone()[0], 0)  # noqa: E501
+            self.assertEqual(
+                db.execute(
+                    "SELECT COUNT(*) FROM shape_perceptual_hash_map WHERE hash_id NOT IN (SELECT hash_id FROM files);"
+                ).fetchone()[0],
+                0,
+            )
             used = {p for (p,) in db.execute("SELECT phash_id FROM shape_perceptual_hash_map;")}
             in_tree = {p for (p,) in db.execute("SELECT phash_id FROM shape_vptree;")}
             self.assertTrue(used <= in_tree)
             self.assertGreater(result.tree_nodes, 0)
-            self.assertIsNone(db.execute("SELECT 1 FROM shape_maintenance_branch_regen WHERE phash_id NOT IN (SELECT phash_id FROM shape_vptree);").fetchone())  # noqa: E501
+            self.assertIsNone(
+                db.execute(
+                    "SELECT 1 FROM shape_maintenance_branch_regen "
+                    "WHERE phash_id NOT IN (SELECT phash_id FROM shape_vptree);"
+                ).fetchone()
+            )
             _assert_relations_kept(self, relations_before, _assert_valid_tree(self, db))
             self.assertEqual(db.execute("PRAGMA integrity_check;").fetchone()[0], "ok")
 
@@ -151,7 +162,11 @@ class TestPruneDeletedFiles(unittest.TestCase):
             db = _new_db(tmpdir, "all.sqlite", hashes)
             relations_before = _assert_valid_tree(self, db)
             root = db.execute("SELECT phash_id FROM shape_vptree WHERE parent_id IS NULL;").fetchone()[0]
-            keep = [f for (h, f) in db.execute("SELECT hash_id, file_hash FROM files;").fetchall() if db.get_phash_id_from_hash_id(h) != root]  # noqa: E501
+            keep = [
+                f
+                for (h, f) in db.execute("SELECT hash_id, file_hash FROM files;").fetchall()
+                if db.get_phash_id_from_hash_id(h) != root
+            ]
             db.begin_transaction()
             with db.conn:
                 db.prune_files_not_in(keep)
@@ -188,13 +203,17 @@ class TestPruneDeletedFiles(unittest.TestCase):
             db = _new_db(tmpdir, "rollback.sqlite", _make_hashes(seed=4))
             tables = _tables(db)
             original = vptree.splice_out_tree_nodes
+
             def boom(*args):
                 raise KeyboardInterrupt
+
             DedupeDB.splice_out_tree_nodes = boom
             try:
+
                 class Client:
                     def get_all_video_hashes_in_hydrus(self):
                         return ["00" * 32]
+
                 self.assertIsNone(db_tools.run_prune(db, Client()))
             finally:
                 DedupeDB.splice_out_tree_nodes = original
@@ -203,9 +222,14 @@ class TestPruneDeletedFiles(unittest.TestCase):
 
     def test_messages(self):
         r = DedupeDB.PruneResult(videos=1, files=1, queued=0, tree_nodes=1, perceptual_hashes=1)
-        self.assertEqual(db_tools.prune_message(r), "Pruned 1 deleted video from the database and 1 entry from the search tree.")  # noqa: E501
+        self.assertEqual(
+            db_tools.prune_message(r), "Pruned 1 deleted video from the database and 1 entry from the search tree."
+        )
         r = DedupeDB.PruneResult(videos=63019, files=63019, queued=0, tree_nodes=2, perceptual_hashes=2)
-        self.assertEqual(db_tools.prune_message(r), "Pruned 63019 deleted videos from the database and 2 entries from the search tree.")  # noqa: E501
+        self.assertEqual(
+            db_tools.prune_message(r),
+            "Pruned 63019 deleted videos from the database and 2 entries from the search tree.",
+        )
         r = DedupeDB.PruneResult(videos=0, files=0, queued=0, tree_nodes=0, perceptual_hashes=0)
         self.assertEqual(db_tools.prune_message(r), "No deleted videos to prune.")
 
@@ -218,8 +242,11 @@ class TestBackup(unittest.TestCase):
             db.close()
             folder = Path(tmpdir)
             old = [folder / f"videohashes.backup-2020010{i}-000000.sqlite" for i in range(1, 5)]
-            others = [folder / "videohashes.backup-notadate.sqlite", folder / "other.backup-20200101-000000.sqlite",
-                      folder / "videohashes.backup-20200101-000000.sqlite.partial"]
+            others = [
+                folder / "videohashes.backup-notadate.sqlite",
+                folder / "other.backup-20200101-000000.sqlite",
+                folder / "videohashes.backup-20200101-000000.sqlite.partial",
+            ]
             for f in old + others:
                 f.write_bytes(b"x")
             path = DedupeDB.backup_db(folder / "videohashes.sqlite")

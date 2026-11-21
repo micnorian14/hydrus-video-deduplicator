@@ -286,14 +286,17 @@ class TestSkipRepeatPairs(unittest.TestCase):
         )
         for line in dedup.SEARCH_CACHE_WARNING.split("\n"):
             self.assertLessEqual(len(line), 80)
-        self.assertEqual(dedup.SPEED_TIPS, (
-            "Speed tips: This step is limited by Hydrus's database. The fewer jobs Hydrus\n"
-            "has queued, the faster this phase runs:\n"
-            " - Close any Hydrus duplicates pages (they recount pairs as they arrive).\n"
-            " - Pause duplicate auto-resolution rules.\n"
-            " - Pause Hydrus idle/background maintenance.\n"
-            " - Pause active downloads and subscriptions."
-        ))
+        self.assertEqual(
+            dedup.SPEED_TIPS,
+            (
+                "Speed tips: This step is limited by Hydrus's database. The fewer jobs Hydrus\n"
+                "has queued, the faster this phase runs:\n"
+                " - Close any Hydrus duplicates pages (they recount pairs as they arrive).\n"
+                " - Pause duplicate auto-resolution rules.\n"
+                " - Pause Hydrus idle/background maintenance.\n"
+                " - Pause active downloads and subscriptions."
+            ),
+        )
         for line in dedup.SPEED_TIPS.split("\n"):
             self.assertLessEqual(len(line), 80)
 

@@ -105,6 +105,7 @@ class ProgressBar(tqdm):
             d["bar_format"] = BAR_FORMAT if d.get("total") else BAR_FORMAT_NO_TOTAL
         return d
 
+
 # Pipelined Hydrus calls for "Finding potential duplicates" (see _find_potential_duplicates_pipelined).
 PIPELINE_DEPTH = 8  # at most this many searched files wait for their Hydrus calls
 
@@ -556,7 +557,9 @@ class HydrusVideoDeduplicator:
                 # in the original order, so the database writes are exactly the same as before.
                 video_hashes = list(video_hashes)
                 prefetcher = ThreadPoolExecutor(max_workers=1, thread_name_prefix="hvd-prefetch")
-                next_fetch = prefetcher.submit(filehasher.fetch_file_or_error, video_hashes[0]) if video_hashes else None
+                next_fetch = (
+                    prefetcher.submit(filehasher.fetch_file_or_error, video_hashes[0]) if video_hashes else None
+                )
                 try:
                     for index, video_hash in enumerate(video_hashes):
                         if self.update_progress_callback:
@@ -663,7 +666,11 @@ class HydrusVideoDeduplicator:
 
         with ProgressBar(
             smoothing=TQDM_SMOOTHING,
-            dynamic_ncols=True, total=len(files), desc="Finding potential duplicates", unit="file", colour="GREEN"
+            dynamic_ncols=True,
+            total=len(files),
+            desc="Finding potential duplicates",
+            unit="file",
+            colour="GREEN",
         ) as pbar:
 
             def apply_done():
@@ -764,14 +771,17 @@ class HydrusVideoDeduplicator:
         results = self.db.execute("SELECT file_hash, phash FROM phashed_file_queue").fetchall()
         # Faster, identical tree inserts (HVD_FAST_INSERT=0 disables). See vptree.fast_tree_building.
         fast_building = vptree.fast_tree_building(self.db) if results else contextlib.nullcontext(False)
-        with fast_building as fast_insert, ProgressBar(
-            smoothing=TQDM_SMOOTHING,
-            total=len(results),
-            desc="Building search tree",
-            dynamic_ncols=True,
-            unit="file",
-            colour="GREEN",
-        ) as pbar:
+        with (
+            fast_building as fast_insert,
+            ProgressBar(
+                smoothing=TQDM_SMOOTHING,
+                total=len(results),
+                desc="Building search tree",
+                dynamic_ncols=True,
+                unit="file",
+                colour="GREEN",
+            ) as pbar,
+        ):
             if fast_insert:
                 with pbar.external_write_mode(file=pbar.fp):
                     print("[blue]Using fast search tree building.")
@@ -890,7 +900,11 @@ class HydrusVideoDeduplicator:
         num_similar_pairs = 0
         with ProgressBar(
             smoothing=TQDM_SMOOTHING,
-            dynamic_ncols=True, total=len(files), desc="Finding potential duplicates", unit="file", colour="GREEN"
+            dynamic_ncols=True,
+            total=len(files),
+            desc="Finding potential duplicates",
+            unit="file",
+            colour="GREEN",
         ) as pbar:
             processed_count = 0
             for hash_id in files:

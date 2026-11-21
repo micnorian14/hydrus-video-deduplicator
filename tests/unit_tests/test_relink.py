@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import unittest
-from contextlib import nullcontext
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -44,7 +43,9 @@ class TestRelinkSearchTree(unittest.TestCase):
             # A file whose perceptual hash row is missing must be skipped, not deleted.
             db.execute("INSERT INTO files ( file_hash ) VALUES ( 'broken' );")
             broken_id = db.get_hash_id("broken")
-            db.execute("INSERT INTO shape_perceptual_hash_map ( phash_id, hash_id ) VALUES ( 999999, ? );", (broken_id,))
+            db.execute(
+                "INSERT INTO shape_perceptual_hash_map ( phash_id, hash_id ) VALUES ( 999999, ? );", (broken_id,)
+            )
             db.commit()
             hash_ids = [r[0] for r in db.execute("SELECT hash_id FROM shape_search_cache ORDER BY hash_id;")]
             before = {
@@ -61,7 +62,9 @@ class TestRelinkSearchTree(unittest.TestCase):
             self.assertEqual(stats["tree_nodes"], phash_count)
             self.assertEqual(stats["skipped_missing_phash"], 1)
             self.assertEqual(stats["files_to_search"], len(hash_ids))
-            self.assertEqual(db.execute("SELECT COUNT(*) FROM shape_perceptual_hash_map;").fetchone()[0], len(hash_ids) + 1)
+            self.assertEqual(
+                db.execute("SELECT COUNT(*) FROM shape_perceptual_hash_map;").fetchone()[0], len(hash_ids) + 1
+            )
             self.assertEqual(
                 db.execute("SELECT COUNT(*) FROM shape_search_cache WHERE searched_distance IS NULL;").fetchone()[0],
                 len(hash_ids),

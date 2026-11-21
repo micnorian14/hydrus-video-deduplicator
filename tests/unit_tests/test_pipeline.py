@@ -142,9 +142,13 @@ class TestPipelinedHydrusCalls(unittest.TestCase):
         for interrupt_at in (3, len(full) // 2):
             path = self._copy(f"cc{interrupt_at}.sqlite")
             db = _open(path)
-            files = [db.get_file_hash(h) for (h,) in db.execute(
-                "SELECT hash_id FROM shape_search_cache WHERE searched_distance is NULL or searched_distance < ?",
-                (vptree.fix_vpdq_similarity(THRESHOLD),)).fetchall()]
+            files = [
+                db.get_file_hash(h)
+                for (h,) in db.execute(
+                    "SELECT hash_id FROM shape_search_cache WHERE searched_distance is NULL or searched_distance < ?",
+                    (vptree.fix_vpdq_similarity(THRESHOLD),),
+                ).fetchall()
+            ]
             db.close()
             first = Recorder(interrupt_at=interrupt_at)
             self.assertEqual(_run(path, True, first), "interrupted")
@@ -152,8 +156,12 @@ class TestPipelinedHydrusCalls(unittest.TestCase):
             self.assertEqual(sent, full[: len(sent)])  # a prefix of exactly the same calls
 
             db = _open(path)
-            marked = {db.get_file_hash(h) for (h,) in db.execute(
-                "SELECT hash_id FROM shape_search_cache WHERE searched_distance IS NOT NULL").fetchall()}
+            marked = {
+                db.get_file_hash(h)
+                for (h,) in db.execute(
+                    "SELECT hash_id FROM shape_search_cache WHERE searched_distance IS NOT NULL"
+                ).fetchall()
+            }
             db.close()
             m = len(marked)
             self.assertEqual(marked, set(files[:m]))  # only the first m files, in order
@@ -164,7 +172,7 @@ class TestPipelinedHydrusCalls(unittest.TestCase):
             second = Recorder()
             _run(path, True, second)
             # resume re-sends the first unmarked file from its start, exactly like an interrupted file today
-            self.assertEqual(second.calls, full[len(done_calls):])
+            self.assertEqual(second.calls, full[len(done_calls) :])
             self.assertEqual(_tables(path), _tables(orig_path))
 
     def test_can_be_disabled(self):

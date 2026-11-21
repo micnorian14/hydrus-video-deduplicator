@@ -686,7 +686,10 @@ class VpTreeManager:
 
                     if ancestor_outer_id is None:
                         writes.append(
-                            ("UPDATE shape_vptree SET outer_id = ? WHERE phash_id = ?;", (perceptual_hash_id, ancestor_id))
+                            (
+                                "UPDATE shape_vptree SET outer_id = ? WHERE phash_id = ?;",
+                                (perceptual_hash_id, ancestor_id),
+                            )
                         )
                         node_edits.append((node, 4, perceptual_hash_id))
 
@@ -1204,7 +1207,9 @@ class VpTreeManager:
                                 node_hamming_distance = int(prefix_distances[k])
                                 current_distance = similar_perceptual_hash_ids_to_distances.get(node_perceptual_hash_id)
                                 if current_distance is None:
-                                    similar_perceptual_hash_ids_to_distances[node_perceptual_hash_id] = node_hamming_distance
+                                    similar_perceptual_hash_ids_to_distances[node_perceptual_hash_id] = (
+                                        node_hamming_distance
+                                    )
                                 else:
                                     similar_perceptual_hash_ids_to_distances[node_perceptual_hash_id] = min(
                                         node_hamming_distance, current_distance

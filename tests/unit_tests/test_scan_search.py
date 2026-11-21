@@ -105,8 +105,13 @@ class TestFastSearchScan(unittest.TestCase):
             with db.conn:
                 db.relink_search_tree()
             root = db.execute("SELECT phash_id FROM shape_vptree WHERE parent_id IS NULL;").fetchone()[0]
-            last = db.execute("SELECT phash_id FROM shape_vptree WHERE inner_id IS NULL AND outer_id IS NULL;").fetchone()[0]
-            db.execute("UPDATE shape_vptree SET radius = ?, inner_id = ? WHERE phash_id = ?;", (vptree.MAX_DISTANCE, root, last))
+            last = db.execute(
+                "SELECT phash_id FROM shape_vptree WHERE inner_id IS NULL AND outer_id IS NULL;"
+            ).fetchone()[0]
+            db.execute(
+                "UPDATE shape_vptree SET radius = ?, inner_id = ? WHERE phash_id = ?;",
+                (vptree.MAX_DISTANCE, root, last),
+            )
             db.commit()
             tree = vptree.VpTreeManager(db)
             tree.enable_fast_search_index()

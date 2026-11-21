@@ -19,7 +19,7 @@ from hydrusvideodeduplicator.dedup_util import (
 
 
 def _span_map(text):
-    return [(text.plain[span.start:span.end], str(span.style)) for span in text.spans]
+    return [(text.plain[span.start : span.end], str(span.style)) for span in text.spans]
 
 
 class TestConsoleStyle(unittest.TestCase):
@@ -37,9 +37,7 @@ class TestConsoleStyle(unittest.TestCase):
         )
         # Quoted Hydrus menu item names are not flags
         self.assertEqual(
-            CODE_TOKEN_RE.findall(
-                'If you clear or resync potential duplicates in Hydrus ("delete all'
-            ),
+            CODE_TOKEN_RE.findall('If you clear or resync potential duplicates in Hydrus ("delete all'),
             [],
         )
 
@@ -92,8 +90,6 @@ class TestConsoleStyle(unittest.TestCase):
         exc = "[Errno 129] Error number -129 occurred"
         styled_exc = style_user_text(exc)
         self.assertEqual(styled_exc.plain, exc)
-
-
 
     def test_startup_lines_keep_rich_highlighting(self):
         # These unlabeled print_and_log startup lines used to get Rich auto-highlighting
@@ -182,7 +178,6 @@ class TestStageMessages(unittest.TestCase):
             dedup.duplicates_result_message(1),
             "1 new potential duplicate pair marked for manual processing.",
         )
-
 
 
 if __name__ == "__main__":

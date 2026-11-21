@@ -65,7 +65,9 @@ def run_prune(db: DedupeDB.DedupeDb, client: HVDClient) -> DedupeDB.PruneResult 
         )
         return None
     if not existing:
-        print_and_log(log, "Skipping --prune-deleted-files: Hydrus returned no videos, so nothing was pruned.", logging.WARNING)  # noqa: E501
+        print_and_log(
+            log, "Skipping --prune-deleted-files: Hydrus returned no videos, so nothing was pruned.", logging.WARNING
+        )
         return None
 
     try:

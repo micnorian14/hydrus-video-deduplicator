@@ -49,7 +49,7 @@ def style_code_spans(text: str, base_style: str | None = None) -> Text:
     pos = 0
     for match in CODE_TOKEN_RE.finditer(text):
         if match.start() > pos:
-            out.append(text[pos:match.start()], style=base_style)
+            out.append(text[pos : match.start()], style=base_style)
         out.append(match.group(0), style=STYLE_CODE)
         pos = match.end()
     if pos < len(text):
@@ -73,7 +73,7 @@ def _style_line(line: str, default_style: str | None) -> Text:
     for label, style in _LABELED_PREFIXES:
         if body.startswith(label):
             colored = label.rstrip()  # "ERROR " -> "ERROR"; "WARNING:" unchanged
-            rest = body[len(colored):]
+            rest = body[len(colored) :]
             out = Text(leading)
             out.append(colored, style=style)
             out.append_text(style_code_spans(rest))
@@ -226,12 +226,12 @@ def display_path(path, *, windows: bool | None = None, environ=None, home: str |
             if lowered == low_base or lowered.startswith(low_base + "\\") or lowered.startswith(low_base + "/"):
                 profile = (environ.get("USERPROFILE") or "").rstrip("\\/")
                 if var == "LOCALAPPDATA" and len(profile) >= 3 and low_base == (profile + "\\AppData\\Local").lower():
-                    return "%USERPROFILE%" + text[len(profile):]  # keeps the path's own AppData\Local casing
-                return f"%{var}%" + text[len(base):]
+                    return "%USERPROFILE%" + text[len(profile) :]  # keeps the path's own AppData\Local casing
+                return f"%{var}%" + text[len(base) :]
         return text
     if home is None:
         home = os.path.expanduser("~")
     home = home.rstrip("/")
     if home and (text == home or text.startswith(home + "/")):
-        return "~" + text[len(home):]
+        return "~" + text[len(home) :]
     return text

@@ -198,7 +198,10 @@ class SearchDistanceIndex:
             if len(nonempty[0]) == 0:
                 continue
             candidates = np.concatenate(
-                [self._perm[j, a:b] for j, a, b in zip(nonempty[0].tolist(), starts[nonempty].tolist(), ends[nonempty].tolist())]
+                [
+                    self._perm[j, a:b]
+                    for j, a, b in zip(nonempty[0].tolist(), starts[nonempty].tolist(), ends[nonempty].tolist())
+                ]
             )
             hamming = np.bitwise_count(self._frames[candidates] ^ q[f]).sum(axis=1, dtype=np.int64)
             hits = candidates[hamming < MATCH_TOLERANCE]

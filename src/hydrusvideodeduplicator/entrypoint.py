@@ -76,9 +76,7 @@ def main(
     ] = False,
     relink_search_tree: Annotated[
         Optional[bool],
-        typer.Option(
-            help="Repair a damaged search tree (one-time; see README). Back up your database first."
-        ),
+        typer.Option(help="Repair a damaged search tree (one-time; see README). Back up your database first."),
     ] = False,
     clear_search_cache: Annotated[
         Optional[bool],
@@ -111,9 +109,7 @@ def main(
     ] = config.gpu_decode,
     skip_repeat_pairs: Annotated[
         Optional[bool],
-        typer.Option(
-            help="Send each pair to Hydrus once per run instead of twice (faster)."
-        ),
+        typer.Option(help="Send each pair to Hydrus once per run instead of twice (faster)."),
     ] = False,
     dedup_database_dir: Annotated[
         Optional[Path],
@@ -180,9 +176,7 @@ def main(
         exit_from_failure()
 
     if clear_search_tree and relink_search_tree:
-        print_and_log(
-            logger, "Use either --clear-search-tree or --relink-search-tree, not both.", logging.ERROR
-        )
+        print_and_log(logger, "Use either --clear-search-tree or --relink-search-tree, not both.", logging.ERROR)
         exit_from_failure()
 
     if threshold < 0.0 or threshold > 100.0:
@@ -293,7 +287,9 @@ def main(
             print("[green] Cleared the search cache.")
 
     else:
-        print_and_log(logger, f"Database not found. Creating one at '{display_path(DedupeDB.get_db_file_path())}'", logging.INFO)
+        print_and_log(
+            logger, f"Database not found. Creating one at '{display_path(DedupeDB.get_db_file_path())}'", logging.INFO
+        )
         if not DedupeDB.get_db_dir().exists():
             DedupeDB.create_db_dir()
         db = DedupeDB.DedupeDb(DedupeDB.get_db_dir(), DedupeDB.get_db_name())

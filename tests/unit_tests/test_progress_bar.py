@@ -23,8 +23,15 @@ class TestProgressBarWidth(unittest.TestCase):
 
     def _render(self, cols):
         out = io.StringIO()
-        bar = dedup.ProgressBar(total=1000, file=out, ncols=cols, desc="Finding potential duplicates", unit="file",
-                                colour="GREEN", smoothing=dedup.TQDM_SMOOTHING)
+        bar = dedup.ProgressBar(
+            total=1000,
+            file=out,
+            ncols=cols,
+            desc="Finding potential duplicates",
+            unit="file",
+            colour="GREEN",
+            smoothing=dedup.TQDM_SMOOTHING,
+        )
         bar.update(123)
         text = str(bar)
         bar.close()
@@ -44,8 +51,15 @@ class TestProgressBarWidth(unittest.TestCase):
         self.assertEqual(got, [110, 70, 110])
 
     def test_same_arguments_as_tqdm(self):
-        bar = dedup.ProgressBar(total=5, file=io.StringIO(), dynamic_ncols=True, smoothing=dedup.TQDM_SMOOTHING,
-                                colour="GREEN", unit="file", desc="x")
+        bar = dedup.ProgressBar(
+            total=5,
+            file=io.StringIO(),
+            dynamic_ncols=True,
+            smoothing=dedup.TQDM_SMOOTHING,
+            colour="GREEN",
+            unit="file",
+            desc="x",
+        )
         self.assertEqual((bar.smoothing, bar.colour, bar.unit, bar.desc), (dedup.TQDM_SMOOTHING, "GREEN", "file", "x"))
         bar.close()
 
@@ -60,7 +74,7 @@ class TestProgressBarWidth(unittest.TestCase):
             cur = ""
             for part in line.split("\r"):
                 vis = cls._ANSI.sub("", part)
-                cur = vis + cur[len(vis):]
+                cur = vis + cur[len(vis) :]
             lines.append(cur)
         return lines
 
@@ -68,8 +82,17 @@ class TestProgressBarWidth(unittest.TestCase):
         # Mid-bar prints used to land on the bar's line and wrap. external_write_mode
         # (used for hashing failure messages) clears the bar, writes the message, then redraws.
         out = io.StringIO()
-        bar = dedup.ProgressBar(total=2, file=out, ncols=50, desc="Perceptually hashing videos", unit="video",
-                                mininterval=0, miniters=1, leave=True, smoothing=0)
+        bar = dedup.ProgressBar(
+            total=2,
+            file=out,
+            ncols=50,
+            desc="Perceptually hashing videos",
+            unit="video",
+            mininterval=0,
+            miniters=1,
+            leave=True,
+            smoothing=0,
+        )
         bar.refresh()
         with bar.external_write_mode(file=bar.fp):
             bar.fp.write("Failed to perceptually hash a file.\n")
@@ -82,14 +105,23 @@ class TestProgressBarWidth(unittest.TestCase):
                 self.assertEqual(line, "Failed to perceptually hash a file.")
         # The bar should be redrawn after the message.
         idx = lines.index("Failed to perceptually hash a file.")
-        self.assertTrue(any("Perceptually hashing videos" in line for line in lines[idx + 1:]))
+        self.assertTrue(any("Perceptually hashing videos" in line for line in lines[idx + 1 :]))
 
     def test_verbose_log_prints_on_their_own_line(self):
         # hydlog.info (e.g. 'Similar files found') goes to the console under --verbose.
         # TqdmLoggingHandler routes those through tqdm.write so they don't append to the live bar.
         out = io.StringIO()
-        bar = dedup.ProgressBar(total=2, file=out, ncols=50, desc="Finding potential duplicates", unit="file",
-                                mininterval=0, miniters=1, leave=True, smoothing=0)
+        bar = dedup.ProgressBar(
+            total=2,
+            file=out,
+            ncols=50,
+            desc="Finding potential duplicates",
+            unit="file",
+            mininterval=0,
+            miniters=1,
+            leave=True,
+            smoothing=0,
+        )
         bar.refresh()
         handler = TqdmLoggingHandler(stream=bar.fp)
         handler.setFormatter(logging.Formatter(" %(asctime)s - %(name)s: %(message)s", "%H:%M:%S"))
@@ -105,12 +137,21 @@ class TestProgressBarWidth(unittest.TestCase):
         self.assertIn('Similar files found: "aaa" and "bbb"', found[0])
         self.assertNotIn("Finding potential duplicates", found[0])
         idx = lines.index(found[0])
-        self.assertTrue(any("Finding potential duplicates" in line for line in lines[idx + 1:]))
+        self.assertTrue(any("Finding potential duplicates" in line for line in lines[idx + 1 :]))
 
     def test_bar_stats_are_coloured(self):
         out = io.StringIO()
-        bar = dedup.ProgressBar(total=1000, file=out, ncols=110, desc="Finding potential duplicates", unit="file",
-                                colour="GREEN", smoothing=0, mininterval=0, miniters=1)
+        bar = dedup.ProgressBar(
+            total=1000,
+            file=out,
+            ncols=110,
+            desc="Finding potential duplicates",
+            unit="file",
+            colour="GREEN",
+            smoothing=0,
+            mininterval=0,
+            miniters=1,
+        )
         bar.update(123)
         text = str(bar)
         bar.close()
@@ -127,16 +168,34 @@ class TestProgressBarWidth(unittest.TestCase):
 
     def test_unknown_total_bar_stats_are_coloured(self):
         out = io.StringIO()
-        bar = dedup.ProgressBar(total=None, file=out, ncols=80, desc="Building search tree", unit="file",
-                                colour="GREEN", smoothing=0, mininterval=0, miniters=1)
+        bar = dedup.ProgressBar(
+            total=None,
+            file=out,
+            ncols=80,
+            desc="Building search tree",
+            unit="file",
+            colour="GREEN",
+            smoothing=0,
+            mininterval=0,
+            miniters=1,
+        )
         bar.refresh()
         text = str(bar)
         bar.close()
         self.assertLessEqual(disp_len(text), 80)
         # Short unknown-total line must still respect the 110-col cap on a wide console.
         wide = io.StringIO()
-        wide_bar = dedup.ProgressBar(total=None, file=wide, ncols=200, desc="Building search tree", unit="file",
-                                    colour="GREEN", smoothing=0, mininterval=0, miniters=1)
+        wide_bar = dedup.ProgressBar(
+            total=None,
+            file=wide,
+            ncols=200,
+            desc="Building search tree",
+            unit="file",
+            colour="GREEN",
+            smoothing=0,
+            mininterval=0,
+            miniters=1,
+        )
         wide_bar.refresh()
         wide_text = str(wide_bar)
         wide_bar.close()

@@ -217,7 +217,9 @@ class Worker(QObject):
                 self.db_upgrade_completed.emit(exc)
         else:
             print_and_log(
-                self.logger, f"Database not found. Creating one at '{display_path(DedupeDB.get_db_file_path())}'", logging.INFO
+                self.logger,
+                f"Database not found. Creating one at '{display_path(DedupeDB.get_db_file_path())}'",
+                logging.INFO,
             )
             if not DedupeDB.get_db_dir().exists():
                 DedupeDB.create_db_dir()
@@ -298,7 +300,9 @@ class Worker(QObject):
         """Same as --backup."""
         try:
             backup_path = run_backup()
-            self.backup_db_completed.emit(backup_message(backup_path) if backup_path else "There is no database yet.", None)  # noqa: E501
+            self.backup_db_completed.emit(
+                backup_message(backup_path) if backup_path else "There is no database yet.", None
+            )
         except Exception as exc:
             print_and_log(self.logger, f"ERROR: Backing up the database failed: {exc}", logging.ERROR, highlight=False)
             self.backup_db_completed.emit(None, exc)
@@ -319,7 +323,8 @@ class Worker(QObject):
             run_backup()
             result = run_prune(self.db, hvdclient)
             self.prune_deleted_files_completed.emit(
-                prune_message(result) if result is not None else "Nothing was pruned. See the console for details.", None  # noqa: E501
+                prune_message(result) if result is not None else "Nothing was pruned. See the console for details.",
+                None,
             )
         except Exception as exc:
             print_and_log(self.logger, f"ERROR: Pruning deleted files failed: {exc}", logging.ERROR, highlight=False)

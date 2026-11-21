@@ -237,7 +237,7 @@ class DedupeDb:
         # fmt: off
         self.execute(
             "CREATE TABLE IF NOT EXISTS shape_maintenance_branch_regen ( phash_id INTEGER PRIMARY KEY )"
-        )  # noqa: E501
+        )
         # fmt: on
         self.execute(
             "CREATE TABLE IF NOT EXISTS shape_search_cache ( hash_id INTEGER PRIMARY KEY, searched_distance INTEGER )"
@@ -315,7 +315,9 @@ class DedupeDb:
         ).fetchone()[0]
 
         # The files clear_search_tree() would requeue (valid perceptual hash AND file row), and their hashes.
-        valid_map = "shape_perceptual_hash_map JOIN shape_perceptual_hashes USING ( phash_id ) JOIN files USING ( hash_id )"  # noqa: E501
+        valid_map = (
+            "shape_perceptual_hash_map JOIN shape_perceptual_hashes USING ( phash_id ) JOIN files USING ( hash_id )"
+        )
         phash_ids = [
             phash_id
             for (phash_id,) in self.execute(f"SELECT DISTINCT phash_id FROM {valid_map} ORDER BY phash_id;").fetchall()
@@ -331,7 +333,8 @@ class DedupeDb:
         # Same search cache as after clear_search_tree() + rebuilding: one row per valid file, not yet searched.
         self.execute("DELETE FROM shape_search_cache;")
         self.execute(
-            f"INSERT INTO shape_search_cache ( hash_id, searched_distance ) SELECT DISTINCT hash_id, NULL FROM {valid_map};"
+            "INSERT INTO shape_search_cache ( hash_id, searched_distance ) "
+            f"SELECT DISTINCT hash_id, NULL FROM {valid_map};"
         )
         files_to_search = self.execute("SELECT COUNT(*) FROM shape_search_cache;").fetchone()[0]
 
@@ -354,26 +357,39 @@ class DedupeDb:
         existing = {normalize_file_hash(file_hash) for file_hash in existing_file_hashes}
 
         file_rows = self.execute("SELECT hash_id, file_hash FROM files;").fetchall()
-        gone_files = [(hash_id, file_hash) for hash_id, file_hash in file_rows if normalize_file_hash(file_hash) not in existing]  # noqa: E501
+        gone_files = [
+            (hash_id, file_hash) for hash_id, file_hash in file_rows if normalize_file_hash(file_hash) not in existing
+        ]
         queue_rows = self.execute("SELECT file_hash FROM phashed_file_queue;").fetchall()
         gone_queue = [file_hash for (file_hash,) in queue_rows if normalize_file_hash(file_hash) not in existing]
         del file_rows, queue_rows
-        videos = len({normalize_file_hash(file_hash) for _, file_hash in gone_files} | {normalize_file_hash(file_hash) for file_hash in gone_queue})  # noqa: E501
+        videos = len(
+            {normalize_file_hash(file_hash) for _, file_hash in gone_files}
+            | {normalize_file_hash(file_hash) for file_hash in gone_queue}
+        )
 
         self.execute("CREATE TEMP TABLE IF NOT EXISTS hvd_prune_hash_ids ( hash_id INTEGER PRIMARY KEY );")
         try:
             self.execute("DELETE FROM temp.hvd_prune_hash_ids;")
-            self.cur.executemany("INSERT INTO temp.hvd_prune_hash_ids ( hash_id ) VALUES ( ? );", [(hash_id,) for hash_id, _ in gone_files])  # noqa: E501
+            self.cur.executemany(
+                "INSERT INTO temp.hvd_prune_hash_ids ( hash_id ) VALUES ( ? );",
+                [(hash_id,) for hash_id, _ in gone_files],
+            )
             in_pruned = "hash_id IN ( SELECT hash_id FROM temp.hvd_prune_hash_ids )"
             affected_phash_ids = {
-                phash_id for (phash_id,) in self.execute(f"SELECT DISTINCT phash_id FROM shape_perceptual_hash_map WHERE {in_pruned};")  # noqa: E501
+                phash_id
+                for (phash_id,) in self.execute(
+                    f"SELECT DISTINCT phash_id FROM shape_perceptual_hash_map WHERE {in_pruned};"
+                )
             }
             self.execute(f"DELETE FROM shape_perceptual_hash_map WHERE {in_pruned};")
             self.execute(f"DELETE FROM shape_search_cache WHERE {in_pruned};")
             self.execute(f"DELETE FROM files WHERE {in_pruned};")
         finally:
             self.execute("DROP TABLE IF EXISTS temp.hvd_prune_hash_ids;")
-        self.cur.executemany("DELETE FROM phashed_file_queue WHERE file_hash = ?;", [(file_hash,) for file_hash in gone_queue])  # noqa: E501
+        self.cur.executemany(
+            "DELETE FROM phashed_file_queue WHERE file_hash = ?;", [(file_hash,) for file_hash in gone_queue]
+        )
 
         still_used = set()
         if affected_phash_ids:
@@ -394,15 +410,20 @@ class DedupeDb:
             nodes = {phash_id: list(values) for phash_id, values in before.items()}
             tree_nodes_removed = splice_out_tree_nodes(nodes, orphan_phash_ids)
             self.cur.executemany(
-                "DELETE FROM shape_vptree WHERE phash_id = ?;", [(phash_id,) for phash_id in before if phash_id not in nodes]  # noqa: E501
+                "DELETE FROM shape_vptree WHERE phash_id = ?;",
+                [(phash_id,) for phash_id in before if phash_id not in nodes],
             )
             self.cur.executemany(
                 "UPDATE shape_vptree SET parent_id = ?, radius = ?, inner_id = ?, inner_population = ?, outer_id = ?, outer_population = ? WHERE phash_id = ?;",  # noqa: E501
                 [(*node, phash_id) for phash_id, node in nodes.items() if tuple(node) != before[phash_id]],
             )
             del before, nodes
-            self.cur.executemany("DELETE FROM shape_perceptual_hashes WHERE phash_id = ?;", [(p,) for p in orphan_phash_ids])  # noqa: E501
-            self.cur.executemany("DELETE FROM shape_maintenance_branch_regen WHERE phash_id = ?;", [(p,) for p in orphan_phash_ids])  # noqa: E501
+            self.cur.executemany(
+                "DELETE FROM shape_perceptual_hashes WHERE phash_id = ?;", [(p,) for p in orphan_phash_ids]
+            )
+            self.cur.executemany(
+                "DELETE FROM shape_maintenance_branch_regen WHERE phash_id = ?;", [(p,) for p in orphan_phash_ids]
+            )
 
         return PruneResult(
             videos=videos,
@@ -663,7 +684,7 @@ Database version {version} is newer than the installed hydrusvideodeduplicator v
             # fmt: off
             self.execute(
                 "CREATE TABLE IF NOT EXISTS shape_maintenance_branch_regen ( phash_id INTEGER PRIMARY KEY )"
-            )  # noqa: E501
+            )
             # fmt: on
             self.execute(
                 "CREATE TABLE IF NOT EXISTS shape_search_cache ( hash_id INTEGER PRIMARY KEY, searched_distance INTEGER )"  # noqa: E501
