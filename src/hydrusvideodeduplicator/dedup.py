@@ -765,10 +765,11 @@ class HydrusVideoDeduplicator:
             # Opt-in, see RepeatPairSkipper. With it off, `send` is exactly the original call.
             skipper = RepeatPairSkipper(send)
             send = skipper
-            # First line blue (info); in the warning only the word "WARNING:" is bold yellow; display only
+            # First line blue (info); in the warning only the word "WARNING:" is bold red,
+            # and the rest of the warning is yellow (same style as the perceptual-hashing failure lines); display only
             first_line, _, warning_lines = SKIP_REPEAT_PAIRS_WARNING.partition("\n")
             _, _, warning_rest = warning_lines.partition("WARNING:")
-            print(Text.assemble((first_line, "blue"), "\n", ("WARNING:", "bold yellow"), warning_rest))
+            print(Text.assemble((first_line, "blue"), "\n", ("WARNING:", "bold red"), (warning_rest, "yellow")))
         try:
             if len(files) > 0 and pipeline_enabled():
                 print("[blue] Using pipelined Hydrus calls.")

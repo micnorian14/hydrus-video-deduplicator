@@ -21,7 +21,7 @@ from hydrusvideodeduplicator.client import (
 from hydrusvideodeduplicator.config import Config
 from hydrusvideodeduplicator.db import DedupeDB
 from hydrusvideodeduplicator.dedup import HydrusVideoDeduplicator
-from hydrusvideodeduplicator.dedup_util import display_path, print_and_log
+from hydrusvideodeduplicator.dedup_util import TqdmLoggingHandler, display_path, print_and_log
 from dotenv import find_dotenv, load_dotenv
 
 import sys
@@ -126,7 +126,12 @@ def main(
         loglevel = logging.DEBUG
         verbose = True
 
-    logging.basicConfig(format=" %(asctime)s - %(name)s: %(message)s", datefmt="%H:%M:%S", level=loglevel)
+    logging.basicConfig(
+        format=" %(asctime)s - %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+        level=loglevel,
+        handlers=[TqdmLoggingHandler()],
+    )
     logger = logging.getLogger("main")
     logger.debug("Starting Hydrus Video Deduplicator.")
 

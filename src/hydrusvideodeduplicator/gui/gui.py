@@ -34,7 +34,7 @@ from hydrusvideodeduplicator.__about__ import __version__
 from hydrusvideodeduplicator.config import (
     Config,
 )
-from hydrusvideodeduplicator.dedup_util import display_path, print_and_log
+from hydrusvideodeduplicator.dedup_util import TqdmLoggingHandler, display_path, print_and_log
 from hydrusvideodeduplicator.dedup import (
     HydrusVideoDeduplicator,
     DedupeProgress,
@@ -945,7 +945,12 @@ def gui_main(config: Config):
     if debug:
         loglevel = logging.DEBUG
 
-    logging.basicConfig(format=" %(asctime)s - %(name)s: %(message)s", datefmt="%H:%M:%S", level=loglevel)
+    logging.basicConfig(
+        format=" %(asctime)s - %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+        level=loglevel,
+        handlers=[TqdmLoggingHandler()],
+    )
     logger = logging.getLogger("main")
     logger.debug("Starting Hydrus Video Deduplicator.")
 

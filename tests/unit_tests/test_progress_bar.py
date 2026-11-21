@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import io
+import logging
 import unittest
 
 from tqdm.utils import disp_len
 
 from hydrusvideodeduplicator import dedup
+from hydrusvideodeduplicator.dedup_util import TqdmLoggingHandler
 
 
 class TestProgressBarWidth(unittest.TestCase):
@@ -76,6 +78,29 @@ class TestProgressBarWidth(unittest.TestCase):
         # The bar should be redrawn after the message.
         idx = lines.index("Failed to perceptually hash a file.")
         self.assertTrue(any("Perceptually hashing files" in line for line in lines[idx + 1:]))
+
+    def test_verbose_log_prints_on_their_own_line(self):
+        # hydlog.info (e.g. 'Similar files found') goes to the console under --verbose.
+        # TqdmLoggingHandler routes those through tqdm.write so they don't append to the live bar.
+        out = io.StringIO()
+        bar = dedup.ProgressBar(total=2, file=out, ncols=50, desc="Finding potential duplicates", unit="file",
+                                mininterval=0, miniters=1, leave=True, smoothing=0)
+        bar.refresh()
+        handler = TqdmLoggingHandler(stream=bar.fp)
+        handler.setFormatter(logging.Formatter(" %(asctime)s - %(name)s: %(message)s", "%H:%M:%S"))
+        logger = logging.getLogger("hvd_tqdm_handler_test")
+        logger.handlers = [handler]
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+        logger.info('Similar files found: "aaa" and "bbb"')
+        lines = [line.rstrip() for line in self._visible_lines(out.getvalue())]
+        bar.close()
+        found = [line for line in lines if "Similar files found" in line]
+        self.assertEqual(len(found), 1)
+        self.assertIn('Similar files found: "aaa" and "bbb"', found[0])
+        self.assertNotIn("Finding potential duplicates", found[0])
+        idx = lines.index(found[0])
+        self.assertTrue(any("Finding potential duplicates" in line for line in lines[idx + 1:]))
 
 
 if __name__ == "__main__":

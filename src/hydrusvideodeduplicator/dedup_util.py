@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     Severity: TypeAlias = int
 
 from rich import print
+from tqdm import tqdm
 
 
 def severity_to_color(severity: Severity) -> str:
@@ -22,6 +23,18 @@ def severity_to_color(severity: Severity) -> str:
         return ""  # No color
     # No color
     return ""
+
+
+class TqdmLoggingHandler(logging.StreamHandler):
+    """A StreamHandler that writes through tqdm so log lines start on their own line if a progress bar is active."""
+
+    def emit(self, record):
+        try:
+            tqdm.write(self.format(record), file=self.stream)
+        except RecursionError:
+            raise
+        except Exception:
+            self.handleError(record)
 
 
 def print_and_log(logger: logging.Logger, msg: str, severity: Severity = logging.INFO):
