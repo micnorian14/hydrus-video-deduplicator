@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import io
 import unittest
+from contextlib import redirect_stdout
 
 from hydrusvideodeduplicator import dedup
 from hydrusvideodeduplicator.dedup_util import (
@@ -56,6 +58,18 @@ class TestConsoleStyle(unittest.TestCase):
         for snippet, style in _span_map(styled):
             if snippet != "Speed tips:":
                 self.fail(f"unexpected style {style!r} on {snippet!r}")
+
+    def test_search_cache_warning_startup_spacing(self):
+        # Once at startup: blank line before and after, between filesize and Custom Query.
+        with redirect_stdout(io.StringIO()) as out:
+            print("Database filesize: 123 bytes.")
+            dedup.print_search_cache_warning()
+            print("Custom Query: ['tag']")
+        printed = out.getvalue()
+        self.assertIn("Database filesize: 123 bytes.\n\n", printed)
+        self.assertIn("\n\nCustom Query: ['tag']\n", printed)
+        self.assertIn(dedup.SEARCH_CACHE_WARNING, printed.replace("\r\n", "\n"))
+        self.assertNotIn("\n\n\n", printed)
 
     def test_search_cache_warning_colors(self):
         styled = style_user_text(dedup.SEARCH_CACHE_WARNING)

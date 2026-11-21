@@ -64,7 +64,7 @@ This step is limited by Hydrus's database. The fewer jobs Hydrus has queued, the
 - Pause Hydrus idle/background maintenance.
 - Pause active downloads and subscriptions.
 
-The program prints these tips at the start of the step, and also this warning:
+The program prints these tips at the start of the step. It also prints this warning once at startup, after the database filesize line:
 
 > ⚠️ **WARNING**: If you clear or resync potential duplicates in Hydrus (**"delete all potential duplicate pairs and re-search"** or **"resync potential duplicate pairs to storage"**), you will have to clear this tool's search cache (`--clear-search-cache`) and re-search every video from zero, which can take DAYS on a large library.
 

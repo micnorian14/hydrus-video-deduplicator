@@ -20,7 +20,7 @@ from hydrusvideodeduplicator.client import (
 )
 from hydrusvideodeduplicator.config import Config
 from hydrusvideodeduplicator.db import DedupeDB
-from hydrusvideodeduplicator.dedup import HydrusVideoDeduplicator
+from hydrusvideodeduplicator.dedup import HydrusVideoDeduplicator, print_search_cache_warning
 from hydrusvideodeduplicator.dedup_util import TqdmLoggingHandler, display_path, print_and_log
 from dotenv import find_dotenv, load_dotenv
 
@@ -236,6 +236,7 @@ def main(
             logger,
             f"Database filesize: {db_stats.file_size} bytes.",
         )
+        print_search_cache_warning()
 
         if clear_search_tree:
             db.begin_transaction()
@@ -275,6 +276,7 @@ def main(
         with db.conn:
             db.create_tables()
         db_stats = DedupeDB.get_db_stats(db)
+        print_search_cache_warning()
 
     deduper = HydrusVideoDeduplicator(
         db,

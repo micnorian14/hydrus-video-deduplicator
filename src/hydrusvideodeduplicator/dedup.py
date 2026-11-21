@@ -122,8 +122,9 @@ def skip_repeat_pairs_enabled_by_env() -> bool:
 # Printed at the start of "Finding potential duplicates" when --skip-repeat-pairs is on. Display only.
 SKIP_REPEAT_PAIRS_INFO = "Skipping repeat pair sends (faster)."
 
-# Printed at the start of "Finding potential duplicates", for everyone (display only).
-# Only the word "WARNING:" is red3 (not bold); --clear-search-cache is magenta; the rest is plain.
+# Printed once at startup after the database filesize (or "creating a database") lines,
+# for everyone (display only). Only the word "WARNING:" is red3 (not bold);
+# --clear-search-cache is magenta; the rest is plain.
 # Lines are kept under 80 characters so they don't get re-wrapped on a standard console.
 SEARCH_CACHE_WARNING = (
     'WARNING: If you clear or resync potential duplicates in Hydrus ("delete all\n'
@@ -132,6 +133,14 @@ SEARCH_CACHE_WARNING = (
     "(--clear-search-cache) and re-search every video from zero, which can take\n"
     "DAYS on a large library."
 )
+
+
+def print_search_cache_warning() -> None:
+    """Display-only: the Hydrus clear/resync warning, with a blank line before and after."""
+    print()
+    console_print(style_user_text(SEARCH_CACHE_WARNING), highlight=False)
+    print()
+
 
 # Printed (normal text) once at the start of "Finding potential duplicates", for everyone. Display only.
 SPEED_TIPS = (
@@ -823,12 +832,6 @@ class HydrusVideoDeduplicator:
                 _section_gap()
                 console_print(Text(SKIP_REPEAT_PAIRS_INFO, style="blue"), highlight=False)
                 need_gap = True
-
-        if len(files) > 0:
-            # WARNING: red3 (not bold); --clear-search-cache magenta; rest plain; display only
-            _section_gap()
-            console_print(style_user_text(SEARCH_CACHE_WARNING), highlight=False)
-            need_gap = True
 
         _section_gap()  # blank line before the progress bar when any of the sections above printed
         try:

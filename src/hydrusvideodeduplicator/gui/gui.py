@@ -37,6 +37,7 @@ from hydrusvideodeduplicator.config import (
 from hydrusvideodeduplicator.dedup_util import TqdmLoggingHandler, display_path, print_and_log
 from hydrusvideodeduplicator.dedup import (
     HydrusVideoDeduplicator,
+    print_search_cache_warning,
     DedupeProgress,
     NoneProgress,
     HashingProgress,
@@ -206,6 +207,7 @@ class Worker(QObject):
                     self.logger,
                     f"Database filesize: {db_stats.file_size} bytes.",
                 )
+                print_search_cache_warning()
             except Exception as exc:
                 print_and_log(self.logger, f"Database upgrade failed: {exc}")
                 self.db = None
@@ -222,6 +224,7 @@ class Worker(QObject):
             with self.db.conn:
                 self.db.create_tables()
             db_stats = DedupeDB.get_db_stats(self.db)
+            print_search_cache_warning()
 
     @Slot()
     def clear_search_cache_connection(self):

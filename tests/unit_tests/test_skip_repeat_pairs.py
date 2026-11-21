@@ -145,7 +145,7 @@ class TestSkipRepeatPairs(unittest.TestCase):
             self.assertEqual(result, len(reference) // 2)
             self.assertNotIn("Skipping repeat pair sends", printed)
             self.assertNotIn("repeat pair sends", printed)
-            self.assertIn(_flat(dedup.SEARCH_CACHE_WARNING), _flat(printed))  # warning for everyone
+            self.assertNotIn("WARNING:", printed)  # warning is at startup, not here
             self.assertIn(_flat(dedup.SPEED_TIPS), _flat(printed))  # speed tips for everyone
             self.assertEqual(_flat(printed).count("Speed tips:"), 1)  # printed once
             tables = tables or _tables(path)
@@ -170,9 +170,10 @@ class TestSkipRepeatPairs(unittest.TestCase):
                     self.assertLess(len(rec.calls), len(off.calls))
                     self.assertEqual(result, off_result)  # printed pair count unchanged
                     self.assertEqual(_tables(path), _tables(off_path))  # 'searched' marks etc. identical
-                    self.assertIn(_flat(dedup.SEARCH_CACHE_WARNING), _flat(printed))
-                    # Blank line between the intro and WARNING, and no leading spaces on Using lines.
-                    self.assertIn("Skipping repeat pair sends (faster).\n\nWARNING:", printed)
+                    # The search-cache warning is printed at startup, not in this phase.
+                    self.assertNotIn("WARNING:", printed)
+                    # Blank line after the skip-repeat intro (the bar is on stderr).
+                    self.assertIn("Skipping repeat pair sends (faster).\n\n", printed)
                     self.assertNotIn(" Using ", printed)
                     if pipeline:
                         self.assertIn("\nUsing pipelined Hydrus calls.\n", printed)
@@ -256,21 +257,20 @@ class TestSkipRepeatPairs(unittest.TestCase):
         # Skip-repeat off: blank line after tips and after Using lines, no double gaps, no leading spaces.
         path, rec, result, printed = self._off(True)
         self.assertIn("subscriptions.\n\nUsing ", printed)
-        # Warning is for everyone, after the Using block, with a blank line before and after.
-        # The bar writes to stderr, so stdout should end with a blank line after the warning.
-        self.assertIn("Using pipelined Hydrus calls.\n\nWARNING:", printed)
-        self.assertTrue(printed.endswith("large library.\n\n"), printed[-80:])
+        # The bar writes to stderr, so stdout should end with a blank line after the Using block.
+        self.assertTrue(printed.endswith("Using pipelined Hydrus calls.\n\n"), printed[-80:])
         self.assertNotIn(" Using ", printed)
         self.assertNotIn("\n\n\n", printed)
         self.assertNotIn("Skipping repeat pair sends", printed)
+        self.assertNotIn("WARNING:", printed)
 
-        # Skip-repeat on: extra blank line between the intro line and WARNING.
+        # Skip-repeat on: Using lines, blank, skip-info line, blank, then the bar (stderr).
         path = self._copy()
         _result, printed = _run(path, True, Recorder(delay=0), skip=True)
-        self.assertIn("Using pipelined Hydrus calls.\n\nSkipping repeat pair sends (faster).\n\nWARNING:", printed)
-        # Warning is followed by a blank line (the bar is on stderr); the skip summary prints after the bar.
-        self.assertIn("large library.\n\n", printed)
+        self.assertIn("Using pipelined Hydrus calls.\n\nSkipping repeat pair sends (faster).\n\n", printed)
+        self.assertNotIn("WARNING:", printed)
         self.assertNotIn(" Using ", printed)
+        self.assertNotIn("\n\n\n", printed)
 
     def test_startup_text(self):
         self.assertEqual(dedup.SKIP_REPEAT_PAIRS_INFO, "Skipping repeat pair sends (faster).")
