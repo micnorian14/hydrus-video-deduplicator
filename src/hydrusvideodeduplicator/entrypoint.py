@@ -104,7 +104,12 @@ def main(
         ),
     ] = False,
     dedup_database_dir: Annotated[
-        Optional[Path], typer.Option(help="The directory to store the database used for dedupe.")
+        Optional[Path],
+        typer.Option(
+            help="The directory to store the database used for dedupe.",
+            # Show a generic label instead of the resolved path, which contains the Windows user name.
+            show_default="your user data folder",
+        ),
     ] = config.dedupe_database_dir,
     verbose: Annotated[Optional[bool], typer.Option(help="Verbose logging")] = False,
     debug: Annotated[Optional[bool], typer.Option(hidden=True)] = False,
