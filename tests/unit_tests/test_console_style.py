@@ -34,7 +34,9 @@ class TestConsoleStyle(unittest.TestCase):
         )
         # Quoted Hydrus menu item names are not flags
         self.assertEqual(
-            CODE_TOKEN_RE.findall('Do NOT use "delete all potential duplicate pairs and re-search" or'),
+            CODE_TOKEN_RE.findall(
+                'If you clear or resync potential duplicates in Hydrus ("delete all'
+            ),
             [],
         )
 
@@ -55,17 +57,17 @@ class TestConsoleStyle(unittest.TestCase):
             if snippet != "Speed tips:":
                 self.fail(f"unexpected style {style!r} on {snippet!r}")
 
-    def test_skip_repeat_warning_colors(self):
-        first_line, _, warning_lines = dedup.SKIP_REPEAT_PAIRS_WARNING.partition("\n")
-        self.assertEqual(first_line, "Skipping repeat pair sends (faster).")
-        styled = style_user_text(warning_lines)
-        self.assertEqual(first_line + "\n" + styled.plain, dedup.SKIP_REPEAT_PAIRS_WARNING)
+    def test_search_cache_warning_colors(self):
+        styled = style_user_text(dedup.SEARCH_CACHE_WARNING)
+        self.assertEqual(styled.plain, dedup.SEARCH_CACHE_WARNING)
         self.assertIn(("WARNING:", STYLE_WARNING_LABEL), _span_map(styled))
         self.assertEqual(STYLE_WARNING_LABEL, "red3")
         self.assertNotIn("bold", STYLE_WARNING_LABEL)
         self.assertIn(("--clear-search-cache", STYLE_CODE), _span_map(styled))
-        # Quoted Hydrus menu names stay plain
-        self.assertNotIn("delete all potential duplicate pairs and re-search", dict(_span_map(styled)))
+        # Only the label and the flag are colored; the rest, including quoted Hydrus menu names, stays plain.
+        styled_map = dict(_span_map(styled))
+        self.assertEqual(set(styled_map), {"WARNING:", "--clear-search-cache"})
+        self.assertNotIn("delete all potential duplicate pairs and re-search", styled_map)
 
     def test_error_prefix_and_literal_brackets(self):
         raw = "ERROR clearing search tree while to get file_hash from hash_id 1. file_hash not found."
@@ -105,7 +107,7 @@ class TestConsoleStyle(unittest.TestCase):
         self.assertFalse(should_auto_highlight(tip))
         self.assertIn(("Tip:", STYLE_TIP_LABEL), _span_map(user_text(tip)))
         self.assertIn(("CTRL+C", STYLE_CODE), _span_map(user_text(tip)))
-        warning = dedup.SKIP_REPEAT_PAIRS_WARNING
+        warning = dedup.SEARCH_CACHE_WARNING
         self.assertFalse(should_auto_highlight(warning))
 
         # Literal error text can opt out of highlighting; brackets stay characters.

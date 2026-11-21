@@ -119,16 +119,18 @@ def skip_repeat_pairs_enabled_by_env() -> bool:
     return os.environ.get("HVD_SKIP_REPEAT_PAIRS", "0").strip().lower() in ("1", "true", "yes", "on")
 
 
-# Printed at the start of "Finding potential duplicates" when --skip-repeat-pairs is on.
-# First line is blue (info); only the word "WARNING:" is red3 (not bold); flags in the text are magenta.
+# Printed at the start of "Finding potential duplicates" when --skip-repeat-pairs is on. Display only.
+SKIP_REPEAT_PAIRS_INFO = "Skipping repeat pair sends (faster)."
+
+# Printed at the start of "Finding potential duplicates", for everyone (display only).
+# Only the word "WARNING:" is red3 (not bold); --clear-search-cache is magenta; the rest is plain.
 # Lines are kept under 80 characters so they don't get re-wrapped on a standard console.
-SKIP_REPEAT_PAIRS_WARNING = (
-    "Skipping repeat pair sends (faster).\n"
-    'WARNING: Do NOT use "delete all potential duplicate pairs and re-search" or\n'
-    '"resync potential duplicate pairs to storage" in Hydrus while this runs.\n'
-    "If you do, you will have to clear this tool's search cache\n"
-    "(--clear-search-cache) and re-search every video from zero,\n"
-    "which can take DAYS on a large library."
+SEARCH_CACHE_WARNING = (
+    'WARNING: If you clear or resync potential duplicates in Hydrus ("delete all\n'
+    'potential duplicate pairs and re-search" or "resync potential duplicate pairs\n'
+    "to storage\"), you will have to clear this tool's search cache\n"
+    "(--clear-search-cache) and re-search every video from zero, which can take\n"
+    "DAYS on a large library."
 )
 
 # Printed (normal text) once at the start of "Finding potential duplicates", for everyone. Display only.
@@ -815,12 +817,16 @@ class HydrusVideoDeduplicator:
             # Opt-in, see RepeatPairSkipper. With it off, `send` is exactly the original call.
             skipper = RepeatPairSkipper(send)
             send = skipper
-            # First line blue (info); only the word "WARNING:" is red3 (not bold); flags are magenta; display only
+            if len(files) > 0:
+                # Blue info line only when skip-repeat is on; display only
+                _section_gap()
+                console_print(Text(SKIP_REPEAT_PAIRS_INFO, style="blue"), highlight=False)
+                need_gap = True
+
+        if len(files) > 0:
+            # WARNING: red3 (not bold); --clear-search-cache magenta; rest plain; display only
             _section_gap()
-            first_line, _, warning_lines = SKIP_REPEAT_PAIRS_WARNING.partition("\n")
-            console_print(Text(first_line, style="blue"), highlight=False)
-            print()
-            console_print(style_user_text(warning_lines), highlight=False)
+            console_print(style_user_text(SEARCH_CACHE_WARNING), highlight=False)
             need_gap = True
 
         _section_gap()  # blank line before the progress bar when any of the sections above printed

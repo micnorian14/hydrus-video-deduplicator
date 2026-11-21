@@ -99,8 +99,7 @@ def main(
     skip_repeat_pairs: Annotated[
         Optional[bool],
         typer.Option(
-            help="Send each pair to Hydrus once per run instead of twice (faster). "
-            "WARNING: see README before using."
+            help="Send each pair to Hydrus once per run instead of twice (faster)."
         ),
     ] = False,
     dedup_database_dir: Annotated[

@@ -145,7 +145,7 @@ class TestSkipRepeatPairs(unittest.TestCase):
             self.assertEqual(result, len(reference) // 2)
             self.assertNotIn("Skipping repeat pair sends", printed)
             self.assertNotIn("repeat pair sends", printed)
-            self.assertNotIn("WARNING", printed)
+            self.assertIn(_flat(dedup.SEARCH_CACHE_WARNING), _flat(printed))  # warning for everyone
             self.assertIn(_flat(dedup.SPEED_TIPS), _flat(printed))  # speed tips for everyone
             self.assertEqual(_flat(printed).count("Speed tips:"), 1)  # printed once
             tables = tables or _tables(path)
@@ -170,7 +170,7 @@ class TestSkipRepeatPairs(unittest.TestCase):
                     self.assertLess(len(rec.calls), len(off.calls))
                     self.assertEqual(result, off_result)  # printed pair count unchanged
                     self.assertEqual(_tables(path), _tables(off_path))  # 'searched' marks etc. identical
-                    self.assertIn(_flat(dedup.SKIP_REPEAT_PAIRS_WARNING), _flat(printed))
+                    self.assertIn(_flat(dedup.SEARCH_CACHE_WARNING), _flat(printed))
                     # Blank line between the intro and WARNING, and no leading spaces on Using lines.
                     self.assertIn("Skipping repeat pair sends (faster).\n\nWARNING:", printed)
                     self.assertNotIn(" Using ", printed)
@@ -256,8 +256,10 @@ class TestSkipRepeatPairs(unittest.TestCase):
         # Skip-repeat off: blank line after tips and after Using lines, no double gaps, no leading spaces.
         path, rec, result, printed = self._off(True)
         self.assertIn("subscriptions.\n\nUsing ", printed)
-        # The bar writes to stderr, so stdout should end with a blank line after the Using block.
-        self.assertTrue(printed.endswith("Using pipelined Hydrus calls.\n\n"), printed[-80:])
+        # Warning is for everyone, after the Using block, with a blank line before and after.
+        # The bar writes to stderr, so stdout should end with a blank line after the warning.
+        self.assertIn("Using pipelined Hydrus calls.\n\nWARNING:", printed)
+        self.assertTrue(printed.endswith("large library.\n\n"), printed[-80:])
         self.assertNotIn(" Using ", printed)
         self.assertNotIn("\n\n\n", printed)
         self.assertNotIn("Skipping repeat pair sends", printed)
@@ -271,19 +273,18 @@ class TestSkipRepeatPairs(unittest.TestCase):
         self.assertNotIn(" Using ", printed)
 
     def test_startup_text(self):
+        self.assertEqual(dedup.SKIP_REPEAT_PAIRS_INFO, "Skipping repeat pair sends (faster).")
         self.assertEqual(
-            dedup.SKIP_REPEAT_PAIRS_WARNING.split("\n")[0], "Skipping repeat pair sends (faster)."
-        )
-        self.assertEqual(
-            _flat(dedup.SKIP_REPEAT_PAIRS_WARNING),
-            _flat(
-                'Skipping repeat pair sends (faster). WARNING: Do NOT use "delete all potential duplicate pairs and '
-                're-search" or "resync potential duplicate pairs to storage" in Hydrus while this runs. If you do, '
-                "you will have to clear this tool's search cache (--clear-search-cache) and re-search every video "
-                "from zero, which can take DAYS on a large library."
+            dedup.SEARCH_CACHE_WARNING,
+            (
+                'WARNING: If you clear or resync potential duplicates in Hydrus ("delete all\n'
+                'potential duplicate pairs and re-search" or "resync potential duplicate pairs\n'
+                "to storage\"), you will have to clear this tool's search cache\n"
+                "(--clear-search-cache) and re-search every video from zero, which can take\n"
+                "DAYS on a large library."
             ),
         )
-        for line in dedup.SKIP_REPEAT_PAIRS_WARNING.split("\n"):
+        for line in dedup.SEARCH_CACHE_WARNING.split("\n"):
             self.assertLessEqual(len(line), 80)
         self.assertTrue(dedup.SPEED_TIPS.startswith("Speed tips: Hydrus does the heavy lifting in this step."))
         self.assertEqual(len(dedup.SPEED_TIPS.split("\n")), 5)
@@ -298,6 +299,8 @@ class TestSkipRepeatPairs(unittest.TestCase):
         result, printed = _run(path, True, rec)
         self.assertEqual((result, rec.calls), (0, []))
         self.assertNotIn("Speed tips", printed)
+        self.assertNotIn("WARNING:", printed)
+        self.assertNotIn("Skipping repeat pair sends", printed)
 
     def test_memory_entry_dropped_after_repeat(self):
         skipper = dedup.RepeatPairSkipper(lambda a, b: None)

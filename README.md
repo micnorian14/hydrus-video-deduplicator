@@ -36,8 +36,8 @@ See [Usage](./docs/usage.md) for how to run the program, and [FAQ](./docs/faq.md
 ## Speed optimizations (this fork)
 
 This fork makes the program do the same thing, faster. Every optimization below gives identical results and leaves
-your Hydrus and dedupe databases exactly as the original program would, except the opt-in `--skip-repeat-pairs`
-(read its warning). Each one has an off-switch that restores the original upstream code for that part.
+your Hydrus and dedupe databases exactly as the original program would, except the opt-in `--skip-repeat-pairs`.
+Each one has an off-switch that restores the original upstream code for that part.
 
 Environment variables are set before running, e.g. in a `.bat` file add a line like `set HVD_PIPELINE=0` before the
 command, or in a Linux/macOS shell run `HVD_PIPELINE=0 python -m hydrusvideodeduplicator ...`.
@@ -64,7 +64,9 @@ Hydrus does the heavy lifting in this step. For best speed while it runs:
 - Pause Hydrus idle/background maintenance.
 - Optional: pause active downloads and subscriptions.
 
-The program prints these tips at the start of the step.
+The program prints these tips at the start of the step, and also this warning:
+
+> ⚠️ **WARNING**: If you clear or resync potential duplicates in Hydrus (**"delete all potential duplicate pairs and re-search"** or **"resync potential duplicate pairs to storage"**), you will have to clear this tool's search cache (`--clear-search-cache`) and re-search every video from zero, which can take DAYS on a large library.
 
 ### `--skip-repeat-pairs`
 
@@ -76,8 +78,6 @@ which cuts the number of Hydrus API calls while finding potential duplicates. It
 - A pair is skipped only if that exact pair was already sent successfully earlier in the same run.
 - Nothing is saved differently: the dedupe database is not changed, and Hydrus ends up with the same pairs.
 - Downloads, subscriptions and duplicate auto-resolution can keep running in Hydrus while it runs.
-
-> ⚠️ **WARNING**: Do NOT use **"delete all potential duplicate pairs and re-search"** or **"resync potential duplicate pairs to storage"** in Hydrus while this runs. If you do, you will have to clear this tool's search cache (`--clear-search-cache`) and re-search every video from zero, which can take DAYS on a large library.
 
 ### `--relink-search-tree`
 

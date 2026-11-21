@@ -79,7 +79,7 @@ python -m hydrusvideodeduplicator --api-key="..." --query="character:batman"
 ### Speed optimizations, speed tips and `--skip-repeat-pairs`
 
 See [Speed optimizations (this fork)](../README.md#speed-optimizations-this-fork) in the README for every speed
-switch and its default, the speed tips for "Finding potential duplicates", `--relink-search-tree`, and the full
-`--skip-repeat-pairs` warning.
+switch and its default, the speed tips for "Finding potential duplicates", `--relink-search-tree`, and the
+warning about clearing or resyncing potential duplicates in Hydrus.
 
-> ⚠️ **WARNING**: with `--skip-repeat-pairs`, do NOT use **"delete all potential duplicate pairs and re-search"** or **"resync potential duplicate pairs to storage"** in Hydrus while this runs. If you do, you will have to clear this tool's search cache (`--clear-search-cache`) and re-search every video from zero, which can take DAYS on a large library.
+> ⚠️ **WARNING**: If you clear or resync potential duplicates in Hydrus (**"delete all potential duplicate pairs and re-search"** or **"resync potential duplicate pairs to storage"**), you will have to clear this tool's search cache (`--clear-search-cache`) and re-search every video from zero, which can take DAYS on a large library.
