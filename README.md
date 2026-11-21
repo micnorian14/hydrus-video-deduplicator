@@ -57,7 +57,7 @@ is hashed, a faster check for already-hashed files, and a smoother progress bar 
 
 ### Speed tips for "Finding potential duplicates"
 
-This step is limited by Hydrus's database. The fewer jobs Hydrus has queued, the dramatically faster this phase runs:
+This step is limited by Hydrus's database. The fewer jobs Hydrus has queued, the faster this phase runs:
 
 - Close any Hydrus duplicates pages (they recount pairs as they arrive).
 - Pause duplicate auto-resolution rules.
