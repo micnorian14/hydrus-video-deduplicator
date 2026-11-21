@@ -108,7 +108,7 @@ def main(
         typer.Option(
             help="The directory to store the database used for dedupe.",
             # Show a generic label instead of the resolved path, which contains the Windows user name.
-            show_default=r"%USERPROFILE%\AppData\Local\hydrusvideodeduplicator\hydrusvideodeduplicator on Windows",
+            show_default=r"%USERPROFILE%\AppData\Local\hydrusvideodeduplicator",
         ),
     ] = config.dedupe_database_dir,
     verbose: Annotated[Optional[bool], typer.Option(help="Verbose logging")] = False,
