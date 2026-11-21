@@ -95,6 +95,11 @@ def _expected_with_skip(calls: list) -> tuple[list, list]:
     return made, idx
 
 
+def _flat(text: str) -> str:
+    """Whitespace-insensitive text, so console line wrapping doesn't matter."""
+    return " ".join(text.split())
+
+
 def _pairs(calls) -> set:
     return {frozenset(c) for c in calls if c[0] != "FAILED"}
 
@@ -140,6 +145,9 @@ class TestSkipRepeatPairs(unittest.TestCase):
             self.assertEqual(result, len(reference) // 2)
             self.assertNotIn("Skipping repeat pair sends", printed)
             self.assertNotIn("repeat pair sends", printed)
+            self.assertNotIn("WARNING", printed)
+            self.assertIn(_flat(dedup.SPEED_TIPS), _flat(printed))  # speed tips for everyone
+            self.assertEqual(_flat(printed).count("Speed tips:"), 1)  # printed once
             tables = tables or _tables(path)
             self.assertEqual(_tables(path), tables)
 
@@ -162,7 +170,8 @@ class TestSkipRepeatPairs(unittest.TestCase):
                     self.assertLess(len(rec.calls), len(off.calls))
                     self.assertEqual(result, off_result)  # printed pair count unchanged
                     self.assertEqual(_tables(path), _tables(off_path))  # 'searched' marks etc. identical
-                    self.assertIn("Skipping repeat pair sends (faster). WARNING", printed)
+                    self.assertIn(dedup.SKIP_REPEAT_PAIRS_WARNING, printed)
+                    self.assertIn(_flat(dedup.SPEED_TIPS), _flat(printed))
                     self.assertIn(f"Skipped {len(off.calls) - len(rec.calls)} repeat pair sends", printed)
 
     # 3. Incremental run: B was searched in an earlier run, new file A finds B -> the pair is still sent.
@@ -235,6 +244,35 @@ class TestSkipRepeatPairs(unittest.TestCase):
         self.assertEqual(calls, [(a, b), (b, a), (b, a)])
         self.assertEqual(skipper.skipped, 1)
         self.assertEqual(len(skipper._sent), 1)
+
+    def test_startup_text(self):
+        self.assertEqual(
+            dedup.SKIP_REPEAT_PAIRS_WARNING.split("\n")[0], "Skipping repeat pair sends (faster)."
+        )
+        self.assertEqual(
+            _flat(dedup.SKIP_REPEAT_PAIRS_WARNING),
+            _flat(
+                'Skipping repeat pair sends (faster). WARNING: Do NOT use "delete all potential duplicate pairs and '
+                're-search" or "resync potential duplicate pairs to storage" in Hydrus while this runs. If you do, '
+                "you will have to clear this tool's search cache (--clear-search-cache) and re-search every video "
+                "from zero, which can take DAYS on a large library."
+            ),
+        )
+        for line in dedup.SKIP_REPEAT_PAIRS_WARNING.split("\n"):
+            self.assertLessEqual(len(line), 80)
+        self.assertTrue(dedup.SPEED_TIPS.startswith("Speed tips: Hydrus does the heavy lifting in this step."))
+        self.assertEqual(len(dedup.SPEED_TIPS.split("\n")), 5)
+
+    def test_no_files_to_search_prints_no_tips(self):
+        path = self._copy()
+        db = _open(path)
+        db.execute("UPDATE shape_search_cache SET searched_distance = ?", (vptree.fix_vpdq_similarity(THRESHOLD),))
+        db.commit()
+        db.close()
+        rec = Recorder(delay=0)
+        result, printed = _run(path, True, rec)
+        self.assertEqual((result, rec.calls), (0, []))
+        self.assertNotIn("Speed tips", printed)
 
     def test_memory_entry_dropped_after_repeat(self):
         skipper = dedup.RepeatPairSkipper(lambda a, b: None)

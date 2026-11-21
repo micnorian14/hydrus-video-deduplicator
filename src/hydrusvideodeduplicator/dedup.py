@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from rich import print
+from rich.text import Text
 from tqdm import tqdm
 
 if TYPE_CHECKING:
@@ -64,10 +65,24 @@ def skip_repeat_pairs_enabled_by_env() -> bool:
     return os.environ.get("HVD_SKIP_REPEAT_PAIRS", "0").strip().lower() in ("1", "true", "yes", "on")
 
 
+# Printed (yellow) at the start of "Finding potential duplicates" when --skip-repeat-pairs is on.
+# Lines are kept under 80 characters so they don't get re-wrapped on a standard console.
 SKIP_REPEAT_PAIRS_WARNING = (
-    'Skipping repeat pair sends (faster). WARNING: do not use "delete all potential duplicate pairs and re-search" '
-    'or "resync potential duplicate pairs to storage" in Hydrus while this runs. If you do, clear this tool\'s '
-    "search cache (--clear-search-cache) and run again."
+    "Skipping repeat pair sends (faster).\n"
+    'WARNING: Do NOT use "delete all potential duplicate pairs and re-search" or\n'
+    '"resync potential duplicate pairs to storage" in Hydrus while this runs.\n'
+    "If you do, you will have to clear this tool's search cache\n"
+    "(--clear-search-cache) and re-search every video from zero,\n"
+    "which can take DAYS on a large library."
+)
+
+# Printed (normal text) once at the start of "Finding potential duplicates", for everyone. Display only.
+SPEED_TIPS = (
+    "Speed tips: Hydrus does the heavy lifting in this step. For best speed while this runs:\n"
+    " - Close any Hydrus duplicates pages (they recount pairs as they arrive).\n"
+    " - Pause duplicate auto-resolution rules.\n"
+    " - Pause Hydrus idle/background maintenance.\n"
+    " - Optional: pause active downloads and subscriptions."
 )
 
 
@@ -704,6 +719,9 @@ class HydrusVideoDeduplicator:
             {"threshold": search_threshold},
         ).fetchall()
 
+        if len(files) > 0:
+            print(Text(SPEED_TIPS))  # plain text (no colour or auto-highlighting); display only
+
         # Speed up the search with an exact in-memory distance index (falls back to the original code if it
         # can't be built, or if HVD_FAST_SEARCH=0). The tree isn't modified during this phase.
         if len(files) > 0 and tree.enable_fast_search_index():
@@ -718,7 +736,7 @@ class HydrusVideoDeduplicator:
             # Opt-in, see RepeatPairSkipper. With it off, `send` is exactly the original call.
             skipper = RepeatPairSkipper(send)
             send = skipper
-            print(f"[yellow]{SKIP_REPEAT_PAIRS_WARNING}")
+            print(Text(SKIP_REPEAT_PAIRS_WARNING, style="yellow"))
         try:
             if len(files) > 0 and pipeline_enabled():
                 print("[blue] Using pipelined Hydrus calls.")

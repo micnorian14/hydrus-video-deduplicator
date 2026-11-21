@@ -40,6 +40,32 @@ Parameters:
 loaded_dotenv = load_dotenv()
 config = Config.load_from_env()
 
+# Shown at the bottom of --help, one paragraph per item.
+CLI_HELP = "Find potential duplicate videos in Hydrus and mark them as potential duplicates for manual review."
+CLI_EPILOG = "\n\n".join(
+    [
+"Speed optimizations and their off-switches. Results are identical with every switch on or off, "
+"except --skip-repeat-pairs (see its warning above). Environment variables are set before running, "
+"e.g. in a .bat file add a line like: set HVD_PIPELINE=0",
+        'HVD_FAST_SEARCH (default 1, on): exact in-memory distance index for "Finding potential duplicates". '
+"0 = original upstream distance calculation. Also switches off HVD_SCAN_SEARCH.",
+"HVD_SCAN_SEARCH (default 1, on): skips the part of the search tree walk that is the same for every "
+"file. 0 = original upstream tree walk.",
+        "HVD_PIPELINE (default 1, on): searches the next files while Hydrus handles the current file's pairs "
+"(same calls, same order). 0 = original upstream one-file-at-a-time loop.",
+        'HVD_FAST_INSERT (default 1, on): faster "Building search tree" with an identical tree. 0 = original '
+"upstream tree inserts.",
+"--skip-repeat-pairs or HVD_SKIP_REPEAT_PAIRS=1 (default 0, OFF): send each pair to Hydrus once per "
+"run. Off = original upstream behavior.",
+"--gpu-decode or GPU_DECODE=1 (default off): decode videos on an NVIDIA GPU while hashing (identical "
+"hashes, falls back to CPU). Off = original upstream CPU decoding.",
+"--relink-search-tree (default off): one-time repair tool, only runs when you ask for it.",
+"Always on, no switch needed (no effect on results or saved data): the next file is downloaded while "
+"the current one is hashed, a faster check for already-hashed files, and a smoother progress bar "
+"speed/ETA (display only).",
+    ]
+)
+
 
 def main(
     api_key: Annotated[
@@ -94,10 +120,12 @@ def main(
         Optional[bool],
         typer.Option(
             help="Faster duplicate search: send each potential duplicate pair to Hydrus once per run instead of "
-            "twice (the second send changes nothing in Hydrus). Off by default. WARNING: do not use \"delete all "
-            "potential duplicate pairs and re-search\" or \"resync potential duplicate pairs to storage\" in Hydrus "
-            "while this runs. If you do, run again with --clear-search-cache. "
-            "Can also be turned on with the environment variable HVD_SKIP_REPEAT_PAIRS=1."
+            "twice (the second send changes nothing in Hydrus). Off by default. Can also be turned on with the "
+            "environment variable HVD_SKIP_REPEAT_PAIRS=1. "
+            "WARNING: Do NOT use \"delete all potential duplicate pairs and re-search\" or \"resync potential "
+            "duplicate pairs to storage\" in Hydrus while this runs. If you do, you will have to clear this tool's "
+            "search cache (--clear-search-cache) and re-search every video from zero, which can take DAYS on a "
+            "large library."
         ),
     ] = False,
     dedup_database_dir: Annotated[
@@ -323,7 +351,10 @@ def run_main(gui: bool, is_executable: bool):
             gui_main(config)
         else:
             try:
-                typer.run(main)
+                # Same as typer.run(main), plus the help text and the optimization switches at the end of --help.
+                app = typer.Typer(add_completion=False)
+                app.command(help=CLI_HELP, epilog=CLI_EPILOG)(main)
+                app()
             except KeyboardInterrupt as exc:
                 raise typer.Exit(-1) from exc
             finally:
