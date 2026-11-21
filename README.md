@@ -99,9 +99,9 @@ or in a Linux/macOS shell run `HVD_PIPELINE=0 python -m hydrusvideodeduplicator 
 | `HVD_PIPELINE` | `1` (on) | Searches the next files while Hydrus handles the current file's pairs (same calls, same order). | Original one-file-at-a-time loop. |
 | `HVD_FAST_INSERT` | `1` (on) | Faster "Building search tree", identical tree. | Original tree inserts. |
 
-### Speed tips for "Finding potential duplicates"
+### Speed tips for the "Finding potential duplicates" phase
 
-This step is limited by Hydrus's database. The fewer jobs Hydrus has queued, the faster this phase runs:
+The final phase of the tool is limited by Hydrus's database queues. The fewer jobs Hydrus has queued, the faster this phase runs:
 
 - Close any Hydrus duplicates pages (they recount pairs as they arrive).
 - Pause duplicate auto-resolution rules.
