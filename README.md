@@ -57,12 +57,12 @@ is hashed, a faster check for already-hashed files, and a smoother progress bar 
 
 ### Speed tips for "Finding potential duplicates"
 
-Hydrus does the heavy lifting in this step. For best speed while it runs:
+This step is limited by Hydrus's database. The fewer jobs Hydrus has queued, the dramatically faster this phase runs:
 
 - Close any Hydrus duplicates pages (they recount pairs as they arrive).
 - Pause duplicate auto-resolution rules.
 - Pause Hydrus idle/background maintenance.
-- Optional: pause active downloads and subscriptions.
+- Pause active downloads and subscriptions.
 
 The program prints these tips at the start of the step, and also this warning:
 

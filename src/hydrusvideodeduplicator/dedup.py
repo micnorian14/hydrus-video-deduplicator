@@ -135,11 +135,12 @@ SEARCH_CACHE_WARNING = (
 
 # Printed (normal text) once at the start of "Finding potential duplicates", for everyone. Display only.
 SPEED_TIPS = (
-    "Speed tips: Hydrus does the heavy lifting in this step. For best speed while this runs:\n"
+    "Speed tips: This step is limited by Hydrus's database. The fewer jobs Hydrus\n"
+    "has queued, the dramatically faster this phase runs:\n"
     " - Close any Hydrus duplicates pages (they recount pairs as they arrive).\n"
     " - Pause duplicate auto-resolution rules.\n"
     " - Pause Hydrus idle/background maintenance.\n"
-    " - Optional: pause active downloads and subscriptions."
+    " - Pause active downloads and subscriptions."
 )
 
 

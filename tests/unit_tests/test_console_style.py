@@ -51,7 +51,7 @@ class TestConsoleStyle(unittest.TestCase):
         styled = style_user_text(dedup.SPEED_TIPS)
         self.assertEqual(styled.plain, dedup.SPEED_TIPS)
         self.assertIn(("Speed tips:", STYLE_TIP_LABEL), _span_map(styled))
-        self.assertTrue(styled.plain.startswith("Speed tips: Hydrus does the heavy lifting"))
+        self.assertTrue(styled.plain.startswith("Speed tips: This step is limited by Hydrus's database"))
         self.assertIn(" - Close any Hydrus duplicates pages", styled.plain)
         for snippet, style in _span_map(styled):
             if snippet != "Speed tips:":
