@@ -12,6 +12,7 @@ from hydrusvideodeduplicator.dedup_util import (
     STYLE_TIP_LABEL,
     STYLE_WARNING_LABEL,
     should_auto_highlight,
+    stage_success_text,
     style_user_text,
     user_text,
 )
@@ -129,6 +130,59 @@ class TestConsoleStyle(unittest.TestCase):
         styled_exc = user_text(exc, highlight=False)
         self.assertEqual(styled_exc.plain, exc)
         self.assertNotIn("repr.brace", [style for _, style in _span_map(styled_exc)])
+
+    def test_stage_success_line_is_green_with_cyan_counts(self):
+        text = stage_success_text("Finished perceptual hashing. Added 2 new perceptual hashes to the database.")
+        self.assertEqual(
+            text.plain,
+            "Finished perceptual hashing. Added 2 new perceptual hashes to the database.",
+        )
+        self.assertEqual(str(text.style), "green")
+        self.assertIn(("2", "repr.number"), _span_map(text))
+
+
+class TestStageMessages(unittest.TestCase):
+    def test_found_videos_to_hash_message(self):
+        self.assertEqual(dedup.found_videos_to_hash_message(0), "No new videos to perceptually hash.")
+        self.assertEqual(dedup.found_videos_to_hash_message(1), "Found 1 video to perceptually hash.")
+        self.assertEqual(dedup.found_videos_to_hash_message(2), "Found 2 videos to perceptually hash.")
+
+    def test_hashing_result_messages(self):
+        self.assertEqual(
+            dedup.finished_hashing_message(0),
+            "Finished perceptual hashing. Added 0 new perceptual hashes to the database.",
+        )
+        self.assertEqual(
+            dedup.finished_hashing_message(1),
+            "Finished perceptual hashing. Added 1 new perceptual hash to the database.",
+        )
+        self.assertEqual(
+            dedup.added_hashes_message(2),
+            "Added 2 new perceptual hashes to the database.",
+        )
+
+    def test_duplicates_result_messages(self):
+        self.assertEqual(
+            dedup.finished_duplicates_message(0),
+            "Finished finding potential duplicates. No new potential duplicate pairs found.",
+        )
+        self.assertEqual(
+            dedup.finished_duplicates_message(1),
+            "Finished finding potential duplicates. 1 new potential duplicate pair marked for manual processing.",
+        )
+        self.assertEqual(
+            dedup.finished_duplicates_message(5),
+            "Finished finding potential duplicates. 5 new potential duplicate pairs marked for manual processing.",
+        )
+        self.assertEqual(
+            dedup.duplicates_result_message(0),
+            "No new potential duplicate pairs found.",
+        )
+        self.assertEqual(
+            dedup.duplicates_result_message(1),
+            "1 new potential duplicate pair marked for manual processing.",
+        )
+
 
 
 if __name__ == "__main__":

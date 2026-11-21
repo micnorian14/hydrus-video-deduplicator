@@ -26,7 +26,7 @@ import hydrusvideodeduplicator.hydrus_api as hydrus_api
 
 from .client import HVDClient
 from .db import DedupeDB, vptree
-from .dedup_util import console_print, print_user, style_user_text
+from .dedup_util import console_print, print_success, print_user, style_user_text
 from .hashing import compute_phash
 from .page_logger import HydrusPageLogger
 from hvdaccelerators import vpdq
@@ -151,6 +151,36 @@ SPEED_TIPS = (
     " - Pause Hydrus idle/background maintenance.\n"
     " - Pause active downloads and subscriptions."
 )
+
+
+def _plural(n: int, singular: str, plural: str | None = None) -> str:
+    return singular if n == 1 else (plural or f"{singular}s")
+
+
+def found_videos_to_hash_message(n: int) -> str:
+    if n == 0:
+        return "No new videos to perceptually hash."
+    return f"Found {n} {_plural(n, 'video')} to perceptually hash."
+
+
+def added_hashes_message(n: int) -> str:
+    return f"Added {n} new perceptual {_plural(n, 'hash', 'hashes')} to the database."
+
+
+def finished_hashing_message(n: int) -> str:
+    return f"Finished perceptual hashing. {added_hashes_message(n)}"
+
+
+def duplicates_result_message(n: int) -> str:
+    if n == 0:
+        return "No new potential duplicate pairs found."
+    return f"{n} new potential duplicate {_plural(n, 'pair')} marked for manual processing."
+
+
+def finished_duplicates_message(n: int) -> str:
+    if n == 0:
+        return "Finished finding potential duplicates. No new potential duplicate pairs found."
+    return f"Finished finding potential duplicates. {duplicates_result_message(n)}"
 
 
 class RepeatPairSkipper:
@@ -403,12 +433,13 @@ class HydrusVideoDeduplicator:
         else:
             video_hashes = list(self.client.get_video_hashes(self.search_tags))
             video_hashes = self.filter_unhashed(video_hashes)
-            print(f"[blue]Found {len(video_hashes)} eligible files to perceptually hash.")
+            print_success(found_videos_to_hash_message(len(video_hashes)))
             print_user("\nTip: You can skip perceptual hashing at any time by pressing CTRL+C.\n")
             self.hydlog.info("Starting perceptual hash processing")
             self.db.begin_transaction()
             with self.db.conn:
                 stats = PerceptualHashingStats()
+                hashing_finished = False
                 try:
                     stats = self.add_perceptual_hashes_to_db(video_hashes)
                 except CancelledPerceptualHashException as exc:
@@ -416,7 +447,8 @@ class HydrusVideoDeduplicator:
                     stats = exc.stats
                     print("[yellow]Perceptual hash processing was interrupted! Progress was saved.")
                 else:
-                    print("[green]Finished perceptual hash processing.")
+                    hashing_finished = True
+                    print_success(finished_hashing_message(stats.success_hash_count))
                 finally:
                     if self.update_progress_callback:
                         self.update_progress_callback(NoneProgress(None))
@@ -439,7 +471,8 @@ class HydrusVideoDeduplicator:
                                 "creating a Hydrus page with the name 'failed' and "
                                 "running the program with '--failed-page-name=failed'\n"
                             )
-                    print(f"[green]Added {stats.success_hash_count} new perceptual hashes to the database.")
+                    if not hashing_finished:
+                        print_success(added_hashes_message(stats.success_hash_count))
 
         # Insert the perceptual hashed files into the vptree.
         print_user("\nTip: You can skip building the search tree at any time by pressing CTRL+C.\n")
@@ -450,7 +483,7 @@ class HydrusVideoDeduplicator:
             except KeyboardInterrupt:
                 print("[yellow]Building the search tree was interrupted! Progress was saved.")
             else:
-                print("[green]Finished fully building the search tree.")
+                print_success("Finished building the search tree.")
 
         self.db.begin_transaction()
         with self.db.conn:
@@ -459,7 +492,7 @@ class HydrusVideoDeduplicator:
             except KeyboardInterrupt:
                 print("[yellow]Maintenance was interrupted!")
             else:
-                print("[green]Finished maintenance.")
+                print_success("Finished maintenance.")
 
         # Number of potential duplicates before adding more.
         # This is just to print info for the user.
@@ -470,18 +503,21 @@ class HydrusVideoDeduplicator:
         print_user("\nTip: You can skip finding potential duplicates at any time by pressing CTRL+C.\n")
         self.db.begin_transaction()
         with self.db.conn:
+            search_finished = False
             try:
                 num_similar_pairs = self.find_potential_duplicates()
             except KeyboardInterrupt:
                 print("[yellow]Searching for duplicates was interrupted! Progress was saved.")
+            else:
+                search_finished = True
 
         # Statistics for user
         post_dedupe_count = self.client.get_potential_duplicate_count_hydrus()
         new_dedupes_count = post_dedupe_count - pre_dedupe_count
-        if new_dedupes_count > 0:
-            print(f"[green]{new_dedupes_count} new potential duplicate pairs marked for manual processing!")
+        if search_finished:
+            print_success(finished_duplicates_message(new_dedupes_count))
         else:
-            print("[green]No new potential duplicate pairs found.")
+            print_success(duplicates_result_message(new_dedupes_count))
 
         self.hydlog.info(f"{num_similar_pairs} similar file pairs found.")
         self.hydlog.info("Deduplication done.")

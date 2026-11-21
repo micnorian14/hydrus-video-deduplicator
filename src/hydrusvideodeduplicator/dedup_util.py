@@ -124,6 +124,18 @@ def print_user(s: str, *, default_style: str | None = None, highlight: bool | No
     console_print(user_text(s, default_style=default_style, highlight=highlight), highlight=False)
 
 
+def stage_success_text(s: str) -> Text:
+    """Green status line; counts stay cyan (Rich number highlighting applied after the base style)."""
+    text = Text(s, style="green")
+    _REPR_HIGHLIGHTER.highlight(text)
+    return text
+
+
+def print_success(s: str) -> None:
+    """Print a completed-stage line in green, with counts in cyan. Display only."""
+    console_print(stage_success_text(s), highlight=False)
+
+
 def print_over_bar(*args, **kwargs) -> None:
     """Rich print, clearing any active tqdm bar first so the message starts on its own line."""
     kwargs.setdefault("highlight", False)
