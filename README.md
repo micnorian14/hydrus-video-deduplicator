@@ -1,4 +1,4 @@
-# Hydrus Video Deduplicator (faster fork)
+# Hydrus Video Deduplicator with optimizations
 
 <div align="center">
 
