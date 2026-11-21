@@ -163,8 +163,8 @@ def print_search_cache_warning() -> None:
 
 # Printed (normal text) once at the start of "Finding potential duplicates", for everyone. Display only.
 SPEED_TIPS = (
-    "Speed tips: This step is limited by Hydrus's database. The fewer jobs Hydrus\n"
-    "has queued, the faster this phase runs:\n"
+    "Speed tips: The final phase of the tool is limited by Hydrus's database queues.\n"
+    "The fewer jobs Hydrus has queued, the faster this phase runs:\n"
     " - Close any Hydrus duplicates pages (they recount pairs as they arrive).\n"
     " - Pause duplicate auto-resolution rules.\n"
     " - Pause Hydrus idle/background maintenance.\n"
