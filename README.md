@@ -8,8 +8,7 @@
 
 This is a fork of [Hydrus Video Deduplicator](https://github.com/hydrusvideodeduplicator/hydrus-video-deduplicator). It does the same job and gives the same results, faster.
 
-- Every speed change gives identical hashes, search tree and potential duplicate pairs, and has a switch that
-  restores the original code for that part.
+- Every speed change gives identical hashes, search tree and potential duplicate pairs.
 - Everything that behaves differently (GPU decode, skipping repeat pair sends, search tree repair, backups, pruning
   deleted files) is opt-in and off by default.
 - The database format is unchanged, so a database used by this fork still works with the original program.
@@ -18,6 +17,8 @@ It also adds `--relink-search-tree` to repair a damaged search tree, as reported
 
 This fork was vibe-coded with AI assistance and tested on a Hydrus library of about 3.5M files, with about 410k
 videos perceptually hashed. As in the original, videos include animated GIFs and APNGs.
+
+Please report problems with this fork on [this fork's issues page](https://github.com/micnorian14/hydrus-video-deduplicator/issues), not on the original project.
 
 The original README follows further down, from [Hydrus Video Deduplicator](#hydrus-video-deduplicator).
 
@@ -32,10 +33,11 @@ out because they risked compatibility with existing databases.
 
 The Windows exe on the original releases page and `pip install hydrusvideodeduplicator` both install the original
 program, without these changes. To use this fork, install it from source. You need [Python](https://www.python.org/downloads/)
-3.10 or newer and [Git](https://git-scm.com/downloads).
+3.10 or newer and [Git](https://git-scm.com/downloads). On Windows, run these commands in Command Prompt (cmd.exe),
+not PowerShell.
 
 ```sh
-git clone https://github.com/micnorian14/hydrus-video-deduplicator.git
+git clone -b gpu-decode https://github.com/micnorian14/hydrus-video-deduplicator.git
 cd hydrus-video-deduplicator
 python -m venv .venv
 .venv\Scripts\activate          # Linux/macOS: source .venv/bin/activate
@@ -125,8 +127,8 @@ python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --gpu-decode
 ```
 
 - Needs an NVIDIA GPU and driver, and a PyAV build with CUDA decoding. The PyAV wheel that `pip install -e .` installs
-  on Windows includes it (tested with PyAV 19.0.2). To check, run
-  `python -c "import av.codec.hwaccel as h; print(h.hwdevices_available())"` and look for `cuda` in the list.
+  on Windows includes it (tested with PyAV 19.0.2). With the flag on, the program prints at startup whether it
+  found a CUDA device.
 - AMD and Intel GPUs are not used; leave the flag off on those systems.
 - Only the hashing step uses it. It doesn't speed up "Finding potential duplicates".
 - You can also set the environment variable `GPU_DECODE=1`. The GUI ignores command line flags, so use
