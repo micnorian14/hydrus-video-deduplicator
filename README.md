@@ -86,7 +86,7 @@ Hydrus is, so your numbers will vary.
 GPU decode was about twice as fast as CPU on HEVC samples. Downloading the next file while the current one hashes,
 and overlapping the Hydrus calls with the search, save more time on top of that.
 
-These are on by default and give identical results. You can disable them if you want to compare against the original
+These are on by default. You can disable them if you want to compare against the original
 or rule one out while troubleshooting.
 
 Set environment variables before running: in a `.bat` file add a line like `set HVD_PIPELINE=0` before the command,
