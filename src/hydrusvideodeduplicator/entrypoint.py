@@ -90,6 +90,16 @@ def main(
         Optional[bool],
         typer.Option(help="Decode videos on an NVIDIA GPU (CUDA). Falls back to CPU if a video can't be GPU decoded."),
     ] = config.gpu_decode,
+    skip_repeat_pairs: Annotated[
+        Optional[bool],
+        typer.Option(
+            help="Faster duplicate search: send each potential duplicate pair to Hydrus once per run instead of "
+            "twice (the second send changes nothing in Hydrus). Off by default. WARNING: do not use \"delete all "
+            "potential duplicate pairs and re-search\" or \"resync potential duplicate pairs to storage\" in Hydrus "
+            "while this runs. If you do, run again with --clear-search-cache. "
+            "Can also be turned on with the environment variable HVD_SKIP_REPEAT_PAIRS=1."
+        ),
+    ] = False,
     dedup_database_dir: Annotated[
         Optional[Path], typer.Option(help="The directory to store the database used for dedupe.")
     ] = config.dedupe_database_dir,
@@ -262,6 +272,7 @@ def main(
         failed_page_name=failed_page_name,
         custom_query=query,
         gpu_decode=bool(gpu_decode),
+        skip_repeat_pairs=bool(skip_repeat_pairs),
     )
 
     if debug:

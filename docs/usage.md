@@ -75,3 +75,26 @@ python -m hydrusvideodeduplicator --api-key="..." --query="character:batman"
 ```
 
 </details>
+
+### Faster duplicate search: `--skip-repeat-pairs`
+
+Most potential duplicate pairs are found twice during the search, once from each file's side, and by default each
+time is sent to Hydrus. Hydrus stores the pair the same way both times, so the second send changes nothing.
+`--skip-repeat-pairs` (or the environment variable `HVD_SKIP_REPEAT_PAIRS=1`) sends each pair only once per run,
+which roughly halves the number of Hydrus API calls while finding potential duplicates. It is off by default.
+
+- A pair is skipped only if that exact pair was already sent successfully earlier in the same run.
+- Nothing is saved differently: the dedupe database is not changed, and Hydrus ends up with the same pairs.
+- Downloads, subscriptions and duplicate auto-resolution can keep running in Hydrus while it runs.
+
+> ⚠️ **Warning**: do not use **"delete all potential duplicate pairs and re-search"** or **"resync potential duplicate pairs to storage"** in Hydrus while the program runs with this option. If you do, run the program again with `--clear-search-cache` so every pair is sent again.
+
+<details>
+<summary>Example</summary>
+<br>
+
+```sh
+python -m hydrusvideodeduplicator --api-key="..." --skip-repeat-pairs
+```
+
+</details>

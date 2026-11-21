@@ -59,6 +59,64 @@ def pipeline_enabled() -> bool:
     return os.environ.get("HVD_PIPELINE", "1").strip() != "0"
 
 
+def skip_repeat_pairs_enabled_by_env() -> bool:
+    """Set the environment variable HVD_SKIP_REPEAT_PAIRS=1 to turn on --skip-repeat-pairs (off by default)."""
+    return os.environ.get("HVD_SKIP_REPEAT_PAIRS", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+SKIP_REPEAT_PAIRS_WARNING = (
+    'Skipping repeat pair sends (faster). WARNING: do not use "delete all potential duplicate pairs and re-search" '
+    'or "resync potential duplicate pairs to storage" in Hydrus while this runs. If you do, clear this tool\'s '
+    "search cache (--clear-search-cache) and run again."
+)
+
+
+class RepeatPairSkipper:
+    """
+    Opt-in (--skip-repeat-pairs / HVD_SKIP_REPEAT_PAIRS=1): send each potential duplicate pair to Hydrus once per
+    run instead of usually twice.
+
+    The search finds most pairs from both sides (file A finds B, later B finds A) and the original code sends both.
+    Hydrus stores a pair the same way whichever file comes first, and the second send just deletes and re-inserts
+    the identical row, so skipping it leaves Hydrus with exactly the same pairs (in normal use, see the warning).
+
+    * A pair is skipped only if that exact pair was already sent SUCCESSFULLY earlier in this run. A pair is
+      recorded only after its Hydrus call returned without an error, so a failed or interrupted call is never
+      treated as sent. Nothing is ever skipped because a file was searched in an earlier run.
+    * Nothing is saved: the record lives in memory for this run only, and the tool's database is untouched.
+    * Once the repeat is skipped the pair is forgotten again, so the memory used stays small.
+    * The calls that are made are the original calls, in the original order, just without the repeats.
+    * Skipped pairs still count as found, so the printed totals are unchanged.
+    """
+
+    def __init__(self, send: Callable[[str, str], None]):
+        self._send = send
+        self._sent: set = set()
+        self.skipped = 0
+
+    @staticmethod
+    def _key(hash_a: str, hash_b: str):
+        """The same key for (A, B) and (B, A)."""
+        lo, hi = (hash_a, hash_b) if hash_a <= hash_b else (hash_b, hash_a)
+        if len(lo) == 64 and len(hi) == 64:
+            try:
+                key = bytes.fromhex(lo + hi)  # compact: 64 bytes instead of two 64 character strings
+                if len(key) == 64:
+                    return key
+            except ValueError:
+                pass
+        return (lo, hi)
+
+    def __call__(self, hash_a: str, hash_b: str) -> None:
+        key = self._key(hash_a, hash_b)
+        if key in self._sent:
+            self._sent.discard(key)
+            self.skipped += 1
+            return
+        self._send(hash_a, hash_b)  # if this raises, the pair is NOT recorded as sent
+        self._sent.add(key)
+
+
 class HydrusApiException(Exception):
     """Wrapper around hydrus_api.HydrusAPIException to avoid some coupling with hydrus_api outside of FileHasher."""
 
@@ -197,6 +255,7 @@ class HydrusVideoDeduplicator:
     hydlog = logging.getLogger("hvd")
     hydlog.setLevel(logging.INFO)
     _DEBUG = False
+    skip_repeat_pairs = False  # see RepeatPairSkipper
 
     def __init__(
         self,
@@ -209,9 +268,11 @@ class HydrusVideoDeduplicator:
         update_progress_callback: UpdateDedupeProgressCallback | None = None,
         should_skip_step_fn: Callable[[], bool] | None = None,
         gpu_decode: bool = False,
+        skip_repeat_pairs: bool = False,
     ):
         self.db = db
         self.gpu_decode = gpu_decode
+        self.skip_repeat_pairs = skip_repeat_pairs
         self.client = client
         self.similarity_threshold = similarity_threshold
         self.job_count = job_count
@@ -426,7 +487,7 @@ class HydrusVideoDeduplicator:
         gc.collect()
         return stats
 
-    def _find_potential_duplicates_pipelined(self, tree, files, search_threshold) -> int:
+    def _find_potential_duplicates_pipelined(self, tree, files, search_threshold, send=None) -> int:
         """
         Same work as the loop in find_potential_duplicates(), but while Hydrus handles one file's pairs the next
         files are already being searched.
@@ -443,7 +504,11 @@ class HydrusVideoDeduplicator:
           ones are not (they are searched and sent again next run, exactly like an interrupted file today).
         * A Hydrus error stops the sender; files before it are marked and the same exception is raised here.
         * Any other error, or the GUI's skip, first lets the queued files finish, like the original loop would have.
+        * `send` makes one Hydrus call (mark_videos_as_duplicates, or the opt-in RepeatPairSkipper wrapping it).
+          It only runs on the sender thread, so a pair counts as sent only after its call succeeded.
         """
+        if send is None:
+            send = self.mark_videos_as_duplicates
         num_similar_pairs = 0
         processed_count = 0
         COMMIT_BATCH_SIZE = 64
@@ -469,7 +534,7 @@ class HydrusVideoDeduplicator:
                         if stop.is_set():
                             return
                         self.hydlog.info(f'Similar files found: "{file_hash_a}" and "{file_hash_b}"')
-                        self.mark_videos_as_duplicates(file_hash_a, file_hash_b)
+                        send(file_hash_a, file_hash_b)
                     done.put(item)
             except BaseException as exc:  # reported to (and raised by) the main thread
                 failure.append(exc)
@@ -647,10 +712,29 @@ class HydrusVideoDeduplicator:
             if tree.enable_fast_search_scan():
                 print("[blue] Using fast search scan.")
 
-        if len(files) > 0 and pipeline_enabled():
-            print("[blue] Using pipelined Hydrus calls.")
-            return self._find_potential_duplicates_pipelined(tree, files, search_threshold)
+        send = self.mark_videos_as_duplicates
+        skipper = None
+        if self.skip_repeat_pairs or skip_repeat_pairs_enabled_by_env():
+            # Opt-in, see RepeatPairSkipper. With it off, `send` is exactly the original call.
+            skipper = RepeatPairSkipper(send)
+            send = skipper
+            print(f"[yellow]{SKIP_REPEAT_PAIRS_WARNING}")
+        try:
+            if len(files) > 0 and pipeline_enabled():
+                print("[blue] Using pipelined Hydrus calls.")
+                return self._find_potential_duplicates_pipelined(tree, files, search_threshold, send)
+            return self._find_potential_duplicates_serial(tree, files, search_threshold, send)
+        finally:
+            if skipper is not None:
+                print(
+                    f"[yellow]Skipped {skipper.skipped} repeat pair sends "
+                    "(each of those pairs had already been sent to Hydrus in this run)."
+                )
 
+    def _find_potential_duplicates_serial(self, tree, files, search_threshold, send=None) -> int:
+        """The original search loop: Hydrus calls one after another on this thread (used with HVD_PIPELINE=0)."""
+        if send is None:
+            send = self.mark_videos_as_duplicates
         num_similar_pairs = 0
         with tqdm(
             smoothing=TQDM_SMOOTHING,
@@ -671,7 +755,7 @@ class HydrusVideoDeduplicator:
                     file_hash_b = self.db.get_file_hash(similar_hash_id)
                     if hash_id != similar_hash_id:
                         self.hydlog.info(f'Similar files found: "{file_hash_a}" and "{file_hash_b}"')
-                        self.mark_videos_as_duplicates(file_hash_a, file_hash_b)
+                        send(file_hash_a, file_hash_b)
                         num_similar_pairs += 1
 
                 # TODO:
