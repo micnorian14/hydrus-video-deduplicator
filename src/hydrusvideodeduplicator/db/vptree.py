@@ -363,6 +363,10 @@ class VpTreeManager:
             # TODO: move this somewhere appropriate. this is bad.
             cur = self.db.conn.cursor()
             cur.execute('ATTACH ":memory:" as mem')
+            # A new, empty mem database was attached (new connection), so table names remembered from
+            # an earlier connection no longer exist. Start with a fresh name cache. On the same connection
+            # the ATTACH fails below and the cache is kept, as before.
+            TemporaryIntegerTableNameCache()
         except sqlite3.OperationalError as exc:
             if str(exc) != "database mem is already in use":
                 raise

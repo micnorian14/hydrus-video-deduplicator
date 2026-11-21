@@ -93,7 +93,7 @@ dependencies = [
 ]
 
 [tool.hatch.envs.test.scripts]
-all = "python -m pytest tests/unit_tests/test_db.py tests/unit_tests/test_vpdqpy.py tests/acceptance_tests/test_dedupe.py tests/acceptance_tests/test_main_vcr.py --verbose {args}"
+all = "python -m pytest tests/unit_tests/test_db.py tests/unit_tests/test_vpdqpy.py tests/unit_tests/test_console_style.py tests/unit_tests/test_display_path.py tests/unit_tests/test_fast_search.py tests/unit_tests/test_pipeline.py tests/unit_tests/test_progress_bar.py tests/unit_tests/test_prune.py tests/unit_tests/test_relink.py tests/unit_tests/test_scan_search.py tests/unit_tests/test_skip_repeat_pairs.py tests/acceptance_tests/test_dedupe.py tests/acceptance_tests/test_main_vcr.py --verbose {args}"
 db = "python -m pytest tests/unit_tests/test_db.py --verbose {args}"
 vpdq = "python -m pytest tests/unit_tests/test_vpdqpy.py --verbose {args}"
 vcr = "python -m pytest tests/acceptance_tests/test_main_vcr.py --verbose {args}"

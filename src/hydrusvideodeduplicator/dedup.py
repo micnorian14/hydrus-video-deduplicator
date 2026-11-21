@@ -136,6 +136,24 @@ SEARCH_CACHE_WARNING = (
 )
 
 
+GPU_DECODE_ON = "Using GPU decode (CUDA)."
+GPU_DECODE_NO_DEVICE = "WARNING: --gpu-decode: no CUDA device found, decoding on the CPU."
+
+
+def print_gpu_decode_status() -> None:
+    """Display-only: say once whether --gpu-decode found a CUDA device. Decoding itself is unchanged."""
+    try:
+        from .vpdqpy.vpdqpy import Vpdq
+
+        available = Vpdq.cuda_decode_available()
+    except Exception:
+        available = False
+    if available:
+        print(f"[blue]{GPU_DECODE_ON}")
+    else:
+        console_print(style_user_text(GPU_DECODE_NO_DEVICE), highlight=False)
+
+
 def print_search_cache_warning() -> None:
     """Display-only: the Hydrus clear/resync warning, with a blank line before and after."""
     print()
@@ -385,6 +403,8 @@ class HydrusVideoDeduplicator:
     ):
         self.db = db
         self.gpu_decode = gpu_decode
+        if gpu_decode:
+            print_gpu_decode_status()
         self.skip_repeat_pairs = skip_repeat_pairs
         self.client = client
         self.similarity_threshold = similarity_threshold

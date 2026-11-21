@@ -55,6 +55,15 @@ class Vpdq:
         return vpdq.matchHash(query_features, target_features, int(distance_tolerance))
 
     @staticmethod
+    def cuda_decode_available() -> bool:
+        """True if a CUDA device for GPU decoding can be opened. Display only; decoding is unchanged."""
+        try:
+            HWAccel(device_type="cuda", allow_software_fallback=False).create(av.Codec("h264", "r"))
+        except Exception:
+            return False
+        return True
+
+    @staticmethod
     def frame_extract_pyav(video_bytes: bytes, gpu_decode: bool = False) -> Iterator[av.VideoFrame]:
         """Extract frames from video
 

@@ -388,7 +388,7 @@ class MainWindow(QWidget):
         self.should_skip_step_semaphore = QSemaphore(n=1)
 
         # Version label with enhanced styling
-        self.version_label = QLabel(f"Hydrus Video Deduplicator v{__version__}", self)
+        self.version_label = QLabel(f"Hydrus Video Deduplicator v{__version__} (optimizations fork)", self)
         self.version_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         version_font = QFont("Segoe UI", 14)
         version_font.setWeight(QFont.Weight.Bold)

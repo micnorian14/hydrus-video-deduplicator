@@ -325,7 +325,7 @@ def main(
 
 
 def run_main(gui: bool, is_executable: bool):
-    print(f"[blue]Hydrus Video Deduplicator {__version__} [/]\n")
+    print(f"[blue]Hydrus Video Deduplicator {__version__} (optimizations fork) [/]\n")
     if loaded_dotenv:
         # Note: This doesn't mean any values were actually loaded from the .env file.
         print(f"Config file found: '{display_path(find_dotenv())}'")
