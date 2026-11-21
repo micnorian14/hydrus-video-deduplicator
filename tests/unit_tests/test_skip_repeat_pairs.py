@@ -173,7 +173,7 @@ class TestSkipRepeatPairs(unittest.TestCase):
                     # The search-cache warning is printed at startup, not in this phase.
                     self.assertNotIn("WARNING:", printed)
                     # Blank line after the skip-repeat intro (the bar is on stderr).
-                    self.assertIn("Skipping repeat pair sends (faster).\n\n", printed)
+                    self.assertIn("Skipping repeat pair sends.\n\n", printed)
                     self.assertNotIn(" Using ", printed)
                     if pipeline:
                         self.assertIn("\nUsing pipelined Hydrus calls.\n", printed)
@@ -267,13 +267,13 @@ class TestSkipRepeatPairs(unittest.TestCase):
         # Skip-repeat on: Using lines, blank, skip-info line, blank, then the bar (stderr).
         path = self._copy()
         _result, printed = _run(path, True, Recorder(delay=0), skip=True)
-        self.assertIn("Using pipelined Hydrus calls.\n\nSkipping repeat pair sends (faster).\n\n", printed)
+        self.assertIn("Using pipelined Hydrus calls.\nSkipping repeat pair sends.\n\n", printed)
         self.assertNotIn("WARNING:", printed)
         self.assertNotIn(" Using ", printed)
         self.assertNotIn("\n\n\n", printed)
 
     def test_startup_text(self):
-        self.assertEqual(dedup.SKIP_REPEAT_PAIRS_INFO, "Skipping repeat pair sends (faster).")
+        self.assertEqual(dedup.SKIP_REPEAT_PAIRS_INFO, "Skipping repeat pair sends.")
         self.assertEqual(
             dedup.SEARCH_CACHE_WARNING,
             (

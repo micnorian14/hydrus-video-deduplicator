@@ -120,7 +120,7 @@ def skip_repeat_pairs_enabled_by_env() -> bool:
 
 
 # Printed at the start of "Finding potential duplicates" when --skip-repeat-pairs is on. Display only.
-SKIP_REPEAT_PAIRS_INFO = "Skipping repeat pair sends (faster)."
+SKIP_REPEAT_PAIRS_INFO = "Skipping repeat pair sends."
 
 # Printed once at startup after the database filesize (or "creating a database") lines,
 # for everyone (display only). Only the word "WARNING:" is red3 (not bold);
@@ -855,6 +855,7 @@ class HydrusVideoDeduplicator:
         if len(files) > 0 and pipeline_enabled():
             if not printed_using:
                 _section_gap()
+                printed_using = True
             print("[blue]Using pipelined Hydrus calls.")
 
         send = self.mark_videos_as_duplicates
@@ -864,8 +865,9 @@ class HydrusVideoDeduplicator:
             skipper = RepeatPairSkipper(send)
             send = skipper
             if len(files) > 0:
-                # Blue info line only when skip-repeat is on; display only
-                _section_gap()
+                # Blue info line only when skip-repeat is on, grouped with the "Using ..." lines; display only
+                if not printed_using:
+                    _section_gap()
                 console_print(Text(SKIP_REPEAT_PAIRS_INFO, style="blue"), highlight=False)
                 need_gap = True
 
