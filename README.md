@@ -67,6 +67,14 @@ plurals, speed tips at the start of the duplicate search, a warning at startup a
 Hydrus, and a shorter `--help`. Printed paths show `%LOCALAPPDATA%`, `%USERPROFILE%` or `~` instead of your user
 folder, so screenshots don't show your user name.
 
+A full run in the Windows console:
+
+<div align="center">
+
+![a full run of this fork in the Windows console](./docs/img/preview_run.png)
+
+</div>
+
 **GUI.** New **Back Up Database** and **Prune Deleted Files** buttons. GPU decode can be turned on with the
 `GPU_DECODE=1` environment variable.
 
