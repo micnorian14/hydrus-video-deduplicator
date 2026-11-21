@@ -556,7 +556,7 @@ class HydrusVideoDeduplicator:
 
         with tqdm(
             smoothing=TQDM_SMOOTHING,
-            dynamic_ncols=True, total=len(files), desc="Finding potential duplicates", unit="file", colour="BLUE"
+            dynamic_ncols=True, total=len(files), desc="Finding potential duplicates", unit="file", colour="GREEN"
         ) as pbar:
 
             def apply_done():
@@ -663,7 +663,7 @@ class HydrusVideoDeduplicator:
             desc="Building search tree",
             dynamic_ncols=True,
             unit="file",
-            colour="BLUE",
+            colour="CYAN",
         ) as pbar:
             if fast_insert:
                 pbar.write("Using fast search tree building.")
@@ -720,7 +720,9 @@ class HydrusVideoDeduplicator:
         ).fetchall()
 
         if len(files) > 0:
-            print(Text(SPEED_TIPS))  # plain text (no colour or auto-highlighting); display only
+            # Header in cyan, tips in plain text (no auto-highlighting); display only
+            tips_header, _, tips_rest = SPEED_TIPS.partition("\n")
+            print(Text.assemble((tips_header, "cyan"), "\n", tips_rest))
 
         # Speed up the search with an exact in-memory distance index (falls back to the original code if it
         # can't be built, or if HVD_FAST_SEARCH=0). The tree isn't modified during this phase.
@@ -736,7 +738,9 @@ class HydrusVideoDeduplicator:
             # Opt-in, see RepeatPairSkipper. With it off, `send` is exactly the original call.
             skipper = RepeatPairSkipper(send)
             send = skipper
-            print(Text(SKIP_REPEAT_PAIRS_WARNING, style="yellow"))
+            # First line yellow, the WARNING lines bold red so they stand out; display only
+            first_line, _, warning_lines = SKIP_REPEAT_PAIRS_WARNING.partition("\n")
+            print(Text.assemble((first_line, "yellow"), "\n", (warning_lines, "bold red")))
         try:
             if len(files) > 0 and pipeline_enabled():
                 print("[blue] Using pipelined Hydrus calls.")
@@ -756,7 +760,7 @@ class HydrusVideoDeduplicator:
         num_similar_pairs = 0
         with tqdm(
             smoothing=TQDM_SMOOTHING,
-            dynamic_ncols=True, total=len(files), desc="Finding potential duplicates", unit="file", colour="BLUE"
+            dynamic_ncols=True, total=len(files), desc="Finding potential duplicates", unit="file", colour="GREEN"
         ) as pbar:
             processed_count = 0
             for hash_id in files:
