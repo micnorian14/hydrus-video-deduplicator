@@ -116,7 +116,12 @@ def user_text(s: str, *, default_style: str | None = None, highlight: bool | Non
 
 def console_print(*args, highlight: bool = False, **kwargs) -> None:
     """Rich Console.print. highlight defaults to off so magenta flags and literal brackets are not restyled."""
-    get_console().print(*args, highlight=highlight, **kwargs)
+    console = get_console()
+    if "width" not in kwargs and console.is_terminal:
+        # Wrap one column short of the window: a line that fills the window exactly can lose its line break in
+        # the Windows console, gluing the next line onto it. Display only.
+        kwargs["width"] = max(console.width - 1, 20)
+    console.print(*args, highlight=highlight, **kwargs)
 
 
 def print_user(s: str, *, default_style: str | None = None, highlight: bool | None = None) -> None:
