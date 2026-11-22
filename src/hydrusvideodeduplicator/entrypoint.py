@@ -22,7 +22,13 @@ from hydrusvideodeduplicator.config import Config, normalize_gpu_decode_args, re
 from hydrusvideodeduplicator.db import DedupeDB
 from hydrusvideodeduplicator.db_tools import check_database, run_backup, run_prune, run_prune_orphans
 from hydrusvideodeduplicator.dedup import HydrusVideoDeduplicator, print_search_cache_warning
-from hydrusvideodeduplicator.dedup_util import TqdmLoggingHandler, display_path, print_and_log
+from hydrusvideodeduplicator.dedup_util import (
+    TqdmLoggingHandler,
+    console_print,
+    display_path,
+    print_and_log,
+    style_user_text,
+)
 from dotenv import find_dotenv, load_dotenv
 
 import sys
@@ -114,7 +120,7 @@ def main(
         Optional[bool],
         typer.Option(
             help="Decode videos on an NVIDIA GPU (CUDA). Falls back to CPU if a video can't be GPU decoded. "
-            "'--gpu-decode auto' decodes each video on the GPU or the CPU, whichever is usually faster for it."
+            "'--gpu-decode auto' uses the GPU and the CPU together, each video on whichever is usually faster for it."
         ),
     ] = config.gpu_decode,
     # Set by '--gpu-decode auto' (see normalize_gpu_decode_args) or GPU_DECODE=auto.
@@ -194,6 +200,16 @@ def main(
     if threshold < 0.0 or threshold > 100.0:
         print_and_log(logger, f"Invalid similarity threshold: {threshold}. Must be between 0 and 100.", logging.ERROR)
         exit_from_failure()
+
+    if config.gpu_decode_invalid is not None:
+        console_print(
+            style_user_text(
+                f"WARNING: Unknown GPU_DECODE value '{config.gpu_decode_invalid}', so GPU decode is off. "
+                "Use 1, 0 or auto."
+            ),
+            highlight=False,
+        )
+        print()
 
     # Client connection
     print_and_log(logger, f"Connecting to Hydrus at {api_url}")

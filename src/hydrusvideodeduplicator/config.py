@@ -35,15 +35,30 @@ def validate_json_array_env_var(env_var: str | None, err_msg: str) -> list | Non
 
 # --gpu-decode auto / GPU_DECODE=auto: each video is decoded on the GPU or the CPU, whichever is usually faster for it.
 GPU_DECODE_AUTO = "auto"
+GPU_DECODE_ON_VALUES = ("1", "true", "yes", "on")
+GPU_DECODE_OFF_VALUES = ("0", "false", "no", "off", "")
+
+
+def _gpu_decode_value_args(value: str) -> list[str] | None:
+    """The flags for '--gpu-decode VALUE', or None if VALUE isn't one."""
+    value = value.lower()
+    if value == GPU_DECODE_AUTO:
+        return ["--gpu-decode-auto"]
+    if value in GPU_DECODE_ON_VALUES:
+        return ["--gpu-decode", "--no-gpu-decode-auto"]
+    if value in GPU_DECODE_OFF_VALUES and value:
+        return ["--no-gpu-decode", "--no-gpu-decode-auto"]
+    return None
 
 
 def normalize_gpu_decode_args(args: list[str]) -> list[str]:
     """
     Let --gpu-decode take an optional value without changing how the flag already works.
 
-    '--gpu-decode auto' and '--gpu-decode=auto' become the hidden '--gpu-decode-auto' flag. A plain '--gpu-decode' or
-    '--no-gpu-decode' also gets '--no-gpu-decode-auto', so on the command line the last one given wins, including over
-    GPU_DECODE=auto. Everything else is passed through unchanged.
+    '--gpu-decode auto' and '--gpu-decode=auto' become the hidden '--gpu-decode-auto' flag. on/true/1/yes mean
+    '--gpu-decode' and off/false/0/no mean '--no-gpu-decode' (any case). A plain '--gpu-decode' or '--no-gpu-decode'
+    also gets '--no-gpu-decode-auto', so on the command line the last one given wins, including over GPU_DECODE=auto.
+    Everything else is passed through unchanged.
     """
     out: list[str] = []
     i = 0
@@ -52,14 +67,18 @@ def normalize_gpu_decode_args(args: list[str]) -> list[str]:
         if arg == "--":
             out.extend(args[i:])
             break
-        if arg.lower() == "--gpu-decode=" + GPU_DECODE_AUTO:
-            out.append("--gpu-decode-auto")
-            i += 1
-            continue
-        if arg == "--gpu-decode" and i + 1 < len(args) and args[i + 1].lower() == GPU_DECODE_AUTO:
-            out.append("--gpu-decode-auto")
-            i += 2
-            continue
+        if arg.lower().startswith("--gpu-decode="):
+            mapped = _gpu_decode_value_args(arg.split("=", 1)[1])
+            if mapped is not None:
+                out.extend(mapped)
+                i += 1
+                continue
+        if arg == "--gpu-decode" and i + 1 < len(args):
+            mapped = _gpu_decode_value_args(args[i + 1])
+            if mapped is not None:
+                out.extend(mapped)
+                i += 2
+                continue
         out.append(arg)
         if arg in ("--gpu-decode", "--no-gpu-decode"):
             out.append("--no-gpu-decode-auto")
@@ -90,6 +109,7 @@ class Config:
         self.hvd_gui = None
         self.gpu_decode = False
         self.gpu_decode_auto = False
+        self.gpu_decode_invalid = None  # an unknown GPU_DECODE value, warned about once at startup
 
     @staticmethod
     def _load(config_map: dict[str, str | None]):
@@ -142,9 +162,11 @@ class Config:
 
         # Use the NVIDIA GPU (CUDA/NVDEC) to decode videos. Hashes are identical to CPU decoding.
         gpu_decode_setting = str(config_map.get("GPU_DECODE", "0")).strip().lower()
-        config.gpu_decode = gpu_decode_setting in ("1", "true", "yes", "on")
+        config.gpu_decode = gpu_decode_setting in GPU_DECODE_ON_VALUES
         # GPU_DECODE=auto: decode each video on the GPU or the CPU, whichever is usually faster for it.
         config.gpu_decode_auto = gpu_decode_setting == GPU_DECODE_AUTO
+        if gpu_decode_setting not in (*GPU_DECODE_ON_VALUES, *GPU_DECODE_OFF_VALUES, GPU_DECODE_AUTO):
+            config.gpu_decode_invalid = str(config_map.get("GPU_DECODE")).strip()
 
         return config
 

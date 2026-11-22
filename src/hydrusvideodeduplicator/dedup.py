@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
     FileHash = str
 
+import atexit
 import contextlib
 import gc
 import os
@@ -26,7 +27,7 @@ import hydrusvideodeduplicator.hydrus_api as hydrus_api
 
 from .client import HVDClient
 from .db import DedupeDB, vptree
-from .dedup_util import console_print, print_success, print_user, style_user_text
+from .dedup_util import console_print, memory_status, print_success, print_user, style_user_text
 from .config import GPU_DECODE_AUTO
 from .hashing import compute_phash, last_decode_used_gpu, video_prefers_gpu_decode
 from .page_logger import HydrusPageLogger, resolve_failed_page_name
@@ -140,26 +141,39 @@ GPU_DECODE_ON = "Using GPU decode (CUDA)."
 GPU_DECODE_NO_DEVICE = "WARNING: --gpu-decode: no CUDA device found, decoding on the CPU."
 GPU_DECODE_AUTO_ON = "Using GPU decode (auto)."
 GPU_DECODE_AUTO_NO_DEVICE = "WARNING: --gpu-decode auto: no CUDA device found, decoding on the CPU."
+GPU_DECODE_NO_NVDEC = (
+    "WARNING: GPU decode is off: your NVIDIA driver is missing video decoding support.\n"
+    "Decoding on the CPU instead. Fix: update your NVIDIA driver, or see the README."
+)
+
+# print_gpu_decode_status() results
+GPU_STATUS_ON = "on"
+GPU_STATUS_NO_DEVICE = "no_device"
+GPU_STATUS_NO_NVDEC = "no_nvdec"
 
 
-def print_gpu_decode_status(auto: bool = False) -> bool:
-    """Say once whether --gpu-decode found a CUDA device, with a blank line after. Returns True if it did.
+def print_gpu_decode_status(auto: bool = False) -> str:
+    """Say once whether GPU decoding can be used, with a blank line after. Returns a GPU_STATUS_* value.
 
-    For plain --gpu-decode this is display only (decoding falls back to the CPU per video by itself).
-    --gpu-decode auto uses the result to decide whether to start its GPU worker.
+    No CUDA device: plain --gpu-decode keeps trying per video (unchanged), auto doesn't start its GPU worker.
+    CUDA but no NVIDIA video decoder library (NVDEC): GPU decode is turned off for the run.
     """
     try:
         from .vpdqpy.vpdqpy import Vpdq
 
-        available = Vpdq.cuda_decode_available()
+        status = GPU_STATUS_NO_DEVICE
+        if Vpdq.cuda_decode_available():
+            status = GPU_STATUS_ON if Vpdq.nvdec_library_available() else GPU_STATUS_NO_NVDEC
     except Exception:
-        available = False
-    if available:
+        status = GPU_STATUS_NO_DEVICE
+    if status == GPU_STATUS_ON:
         print(f"[blue]{GPU_DECODE_AUTO_ON if auto else GPU_DECODE_ON}")
+    elif status == GPU_STATUS_NO_NVDEC:
+        console_print(style_user_text(GPU_DECODE_NO_NVDEC), highlight=False)
     else:
         console_print(style_user_text(GPU_DECODE_AUTO_NO_DEVICE if auto else GPU_DECODE_NO_DEVICE), highlight=False)
     print()
-    return available
+    return status
 
 
 def gpu_decode_auto_summary(gpu_count: int, cpu_count: int) -> str:
@@ -168,11 +182,66 @@ def gpu_decode_auto_summary(gpu_count: int, cpu_count: int) -> str:
 
 # --gpu-decode auto: how many downloaded videos may wait for a free worker (on top of the two being hashed).
 AUTO_READY_FILES = 2
+# --gpu-decode auto, low RAM: before each download, keep at least AUTO_RAM_RESERVE free after room for two copies of
+# a video (the download briefly needs two). The video's size is estimated from the largest one so far, at least
+# AUTO_RAM_MIN_FILE. With AUTO_RAM_HEADROOM more free, AUTO_READY_FILES may wait; with less, 1; below the reserve, the
+# next video is downloaded only when nothing else is in memory. Videos above AUTO_RAM_ALONE_FRACTION of all RAM are
+# hashed alone. Never blocks forever: with nothing in memory a download always starts.
+GIB = 1024**3
+AUTO_RAM_RESERVE = 2 * GIB
+AUTO_RAM_HEADROOM = 2 * GIB
+AUTO_RAM_MIN_FILE = 512 * 1024**2
+AUTO_RAM_ALONE_FRACTION = 0.25
+# --gpu-decode auto: how long to wait for the workers to finish their current video after the run (or the GUI's
+# skip), and at exit after CTRL+C (the CTRL+C itself never waits).
+AUTO_JOIN_S = 30.0
+AUTO_EXIT_JOIN_S = 10.0
 # --gpu-decode auto: when the GPU worker is idle, no video is waiting for it and the CPU worker is busy, the GPU worker
 # takes the oldest waiting CPU video (decoded on the GPU) instead of sitting idle. Hashes are identical either way.
 # Only this direction: the GPU path barely uses the CPU, while a heavy GPU video (e.g. H.264 4K) on the CPU is
 # several times slower and was measured to make the whole run slower.
 AUTO_SHARE_WORK = True
+
+
+def auto_ready_limit(free_bytes: int | None, largest_file: int) -> int:
+    """--gpu-decode auto: how many downloaded videos may wait for a worker, given free RAM (None: unknown)."""
+    if free_bytes is None:
+        return AUTO_READY_FILES
+    need = AUTO_RAM_RESERVE + 2 * max(largest_file, AUTO_RAM_MIN_FILE)
+    if free_bytes >= need + AUTO_RAM_HEADROOM:
+        return AUTO_READY_FILES
+    if free_bytes >= need:
+        return 1
+    return 0
+
+
+def hash_alone(file_size: int, total_bytes: int | None) -> bool:
+    """--gpu-decode auto: True if a video is so big compared to the RAM that it's hashed with nothing else in memory."""
+    return total_bytes is not None and file_size > total_bytes * AUTO_RAM_ALONE_FRACTION
+
+
+def logical_cpu_count() -> int:
+    """CPUs this process may use (respects affinity and containers where Python can tell)."""
+    try:
+        return len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        return os.cpu_count() or 1
+
+
+def auto_worker_settings(logical_cpus: int, job_count: int) -> tuple[int, bool]:
+    """--gpu-decode auto on weak CPUs: (hashing threads for the GPU worker, whether it helps with CPU videos).
+
+    Below 4 CPUs the GPU worker hashes with 1 thread so it doesn't slow the CPU worker. At 2 or fewer it also
+    doesn't take CPU videos.
+    """
+    gpu_threads = 1 if logical_cpus < 4 else job_count
+    return gpu_threads, AUTO_SHARE_WORK and logical_cpus > 2
+
+
+def _join_threads(threads, timeout: float) -> None:
+    deadline = time.monotonic() + timeout
+    for thread in threads:
+        thread.join(max(0.0, deadline - time.monotonic()))
 
 
 def print_search_cache_warning() -> None:
@@ -448,7 +517,10 @@ class HydrusVideoDeduplicator:
         self.gpu_decode_auto = gpu_decode == GPU_DECODE_AUTO
         self.gpu_decode_available = False
         if gpu_decode:
-            self.gpu_decode_available = print_gpu_decode_status(auto=self.gpu_decode_auto)
+            status = print_gpu_decode_status(auto=self.gpu_decode_auto)
+            self.gpu_decode_available = status == GPU_STATUS_ON
+            if status == GPU_STATUS_NO_NVDEC and not self.gpu_decode_auto:
+                self.gpu_decode = False  # no video could be GPU decoded
         self.skip_repeat_pairs = skip_repeat_pairs
         self.client = client
         self.similarity_threshold = similarity_threshold
@@ -695,42 +767,62 @@ class HydrusVideoDeduplicator:
         """
         --gpu-decode auto: a GPU worker and a CPU worker hash different videos at the same time.
 
-        * One download thread fetches the videos from Hydrus in order, at most AUTO_READY_FILES ahead, and reads each
-          video's codec and resolution from its header (no decoding) to pick GPU or CPU (prefers_gpu_decode).
+        * One download thread fetches the videos from Hydrus in order, at most AUTO_READY_FILES ahead (fewer when RAM
+          is low, see auto_ready_limit), and reads each video's codec and resolution from its header (no decoding) to
+          pick GPU or CPU (prefers_gpu_decode).
         * Each worker takes the oldest waiting video meant for it. With AUTO_SHARE_WORK, an idle GPU worker also takes
           the oldest waiting CPU video while the CPU worker is busy. Hashes are identical on the GPU and the CPU, so
-          this only changes speed.
+          this only changes speed. Fewer than 4 CPUs: see auto_worker_settings.
         * A video that fails on the GPU is retried on the CPU (compute_phash), same as plain --gpu-decode.
         * Results come back to this (main) thread, which alone does the DB writes, the commit every 4 videos, the
           failed-page and progress updates (_save_phash_result), same as the normal loop. The order can differ.
         * No CUDA device: everything is hashed by the CPU worker.
-        * Ctrl+C or the GUI's skip: no more videos are handed out and this returns right away. Videos still being
-          hashed are not saved and are hashed again next run, like an interrupted video in the normal loop.
+        * Ctrl+C or the GUI's skip: no more videos are handed out. Videos still being hashed are not saved and are
+          hashed again next run, like an interrupted video in the normal loop. After the skip or a normal end this
+          waits up to AUTO_JOIN_S for the threads to stop; after Ctrl+C it returns at once and waits at exit.
         """
         use_gpu = self.gpu_decode_available
+        gpu_threads, share_work = auto_worker_settings(logical_cpu_count(), filehasher.num_threads)
+        gpu_filehasher = FileHasher(self.client, gpu_threads)
         total = len(video_hashes)
         cond = threading.Condition()
-        waiting: list = []  # (file_hash, file bytes or HydrusApiException, prefers GPU)
+        waiting: list = []  # (file_hash, file bytes or HydrusApiException, prefers GPU, hash alone)
         busy = {True: False, False: False}  # by worker: True = GPU worker, False = CPU worker
+        memory = {"videos": 0, "alone": 0, "largest": 0}  # videos waiting or being hashed; how many to hash alone
         fetch_done = threading.Event()
         stop = threading.Event()
         results: queue.Queue = queue.Queue()
         failure: list[BaseException] = []
 
+        def may_download() -> bool:
+            if memory["videos"] == 0:
+                return True  # never wait with nothing in memory
+            if memory["alone"]:
+                return False
+            status = memory_status()
+            return len(waiting) < auto_ready_limit(status[0] if status else None, memory["largest"])
+
         def fetch_all() -> None:
             try:
                 for file_hash in video_hashes:
                     with cond:
-                        while len(waiting) >= AUTO_READY_FILES and not stop.is_set():
+                        while not stop.is_set() and not may_download():
                             cond.wait(0.5)
                     if stop.is_set():
                         return
                     fetched = filehasher.fetch_file_or_error(file_hash)
-                    wants_gpu = (
-                        use_gpu and not isinstance(fetched, HydrusApiException) and video_prefers_gpu_decode(fetched)
-                    )
+                    is_file = not isinstance(fetched, HydrusApiException)
+                    wants_gpu = use_gpu and is_file and video_prefers_gpu_decode(fetched)
+                    alone = False
+                    if is_file:
+                        status = memory_status()
+                        alone = hash_alone(len(fetched), status[1] if status else None)
                     with cond:
-                        waiting.append((file_hash, fetched, wants_gpu))
+                        if is_file:
+                            memory["largest"] = max(memory["largest"], len(fetched))
+                        memory["videos"] += 1
+                        memory["alone"] += alone
+                        waiting.append((file_hash, fetched, wants_gpu, alone))
                         cond.notify_all()
                     del fetched
             except BaseException as exc:
@@ -744,9 +836,11 @@ class HydrusVideoDeduplicator:
             with cond:
                 while not stop.is_set():
                     index = next((i for i, item in enumerate(waiting) if item[2] == on_gpu), None)
-                    if index is None and waiting and AUTO_SHARE_WORK and on_gpu and busy[False]:
+                    if index is None and waiting and share_work and on_gpu and busy[False]:
                         index = 0
-                    if index is not None:
+                    if index is not None and waiting[index][3] and busy[not on_gpu]:
+                        index = None  # a video to hash alone waits until the other worker is done
+                    if index is not None and not any(item[3] for item in waiting[:index]) and not hashing_alone():
                         busy[on_gpu] = True
                         item = waiting.pop(index)
                         cond.notify_all()
@@ -756,21 +850,28 @@ class HydrusVideoDeduplicator:
                     cond.wait(0.5)
                 return None
 
+        def hashing_alone() -> bool:
+            # a video being hashed alone: "alone" counts it while it's waiting or being hashed
+            return memory["alone"] > sum(1 for item in waiting if item[3])
+
         def work(on_gpu: bool) -> None:
+            hasher = gpu_filehasher if on_gpu else filehasher
             try:
                 while not stop.is_set():
                     item = take(on_gpu)
                     if item is None:
                         return
-                    file_hash, fetched, _ = item
+                    file_hash, fetched, _, alone = item
                     del item
-                    result = filehasher.phash_fetched_file(file_hash, fetched, gpu_decode=on_gpu)
+                    result = hasher.phash_fetched_file(file_hash, fetched, gpu_decode=on_gpu)
                     decoded = not isinstance(fetched, HydrusApiException)
                     used_gpu = last_decode_used_gpu() if on_gpu else False
                     decoded_on_gpu = on_gpu if used_gpu is None else used_gpu
                     del fetched
                     with cond:
                         busy[on_gpu] = False
+                        memory["videos"] -= 1
+                        memory["alone"] -= alone
                         cond.notify_all()
                     results.put((result, decoded_on_gpu, decoded))
             except BaseException as exc:
@@ -782,6 +883,7 @@ class HydrusVideoDeduplicator:
         threads = [threading.Thread(target=fetch_all, name="hvd-prefetch", daemon=True), *workers]
         for thread in threads:
             thread.start()
+        interrupted = False
         try:
             for _ in range(total):
                 if self.update_progress_callback:
@@ -809,11 +911,18 @@ class HydrusVideoDeduplicator:
                 pbar.update(1)
                 if self.update_progress_callback:
                     self.update_progress_callback(HashingProgress(complete=pbar.n, total=pbar.total))
+        except KeyboardInterrupt:
+            interrupted = True
+            raise
         finally:
             stop.set()
             with cond:
                 waiting.clear()
                 cond.notify_all()
+            if interrupted:
+                atexit.register(_join_threads, threads, AUTO_EXIT_JOIN_S)
+            else:
+                _join_threads(threads, AUTO_JOIN_S)
 
     def _find_potential_duplicates_pipelined(self, tree, files, search_threshold, send=None) -> int:
         """

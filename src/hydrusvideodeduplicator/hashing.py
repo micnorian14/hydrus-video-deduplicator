@@ -25,21 +25,24 @@ def compute_phash(video: Path | str | bytes, num_threads: int = 0, gpu_decode: b
 # (e.g. 2160x3840) count the same as landscape ones. 90% of 2560x1440 leaves room for slightly cropped videos while
 # 1080p (about 2.1 million pixels) stays well below.
 GPU_DECODE_MIN_H264_PIXELS = 2560 * 1440 * 9 // 10
+# Tiny HEVC videos (below about 640x360) hash faster on the CPU: setting up the GPU decoder costs more than it saves.
+GPU_DECODE_MIN_HEVC_PIXELS = 640 * 360 * 9 // 10
 
 
 def prefers_gpu_decode(codec: str | None, width: int | None, height: int | None) -> bool:
     """
     --gpu-decode auto: True if a video with this codec and resolution is usually hashed faster with GPU decoding.
 
-    Fixed rules from benchmarks on real files (RTX 5070 Ti, 12 and 4 CPU cores): HEVC at any resolution and H.264 at
-    about 1440p and above. Everything else (H.264 at 1080p and below, VP8, VP9, MPEG-4, AV1, unknown) is usually as
-    fast or faster on the CPU. Hashes are identical either way, so this only affects speed.
+    Fixed rules from benchmarks on real files (RTX 5070 Ti, 12 and 4 CPU cores): HEVC at about 640x360 and above, and
+    H.264 at about 1440p and above. Everything else (smaller HEVC, H.264 at 1080p and below, VP8, VP9, MPEG-4, AV1,
+    unknown) is usually as fast or faster on the CPU. Hashes are identical either way, so this only affects speed.
     """
     codec = (codec or "").lower()
+    pixels = max(width or 0, 0) * max(height or 0, 0)
     if codec in ("hevc", "h265"):
-        return True
+        return pixels >= GPU_DECODE_MIN_HEVC_PIXELS
     if codec == "h264":
-        return max(width or 0, 0) * max(height or 0, 0) >= GPU_DECODE_MIN_H264_PIXELS
+        return pixels >= GPU_DECODE_MIN_H264_PIXELS
     return False
 
 

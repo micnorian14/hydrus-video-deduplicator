@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+import ctypes
 import io
 import logging
+import os
+import sys
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import av
-from av.codec.hwaccel import HWAccel
 from hvdaccelerators import vpdq
+
+try:
+    from av.codec.hwaccel import HWAccel
+except ImportError:  # PyAV without hardware decoding support: GPU decode is reported as unavailable
+    HWAccel = None
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -30,6 +37,16 @@ _decode_state = threading.local()
 
 class NotDecodedOnGpuError(Exception):
     """GPU decoding was asked for, but FFmpeg fell back to (single-threaded) software decoding for this video."""
+
+
+def cuda_device() -> str | None:
+    """GPU_DECODE_DEVICE: which NVIDIA GPU decodes (0 = the first). Unset or not a number: the default GPU."""
+    value = os.environ.get("GPU_DECODE_DEVICE", "").strip()
+    return value if value.isdigit() else None
+
+
+# NVIDIA's video decoder library (NVDEC). CUDA can work without it, e.g. in Docker without the "video" capability.
+NVDEC_LIBRARIES = {"win32": ("nvcuvid.dll",), "linux": ("libnvcuvid.so.1", "libnvcuvid.so")}
 
 
 class Vpdq:
@@ -64,12 +81,34 @@ class Vpdq:
 
     @staticmethod
     def cuda_decode_available() -> bool:
-        """True if a CUDA device for GPU decoding can be opened. Display only; decoding is unchanged."""
+        """True if a CUDA device for GPU decoding can be opened with this PyAV (17 or newer)."""
+        if HWAccel is None:
+            return False
         try:
-            HWAccel(device_type="cuda", allow_software_fallback=False).create(av.Codec("h264", "r"))
+            HWAccel(device_type="cuda", device=cuda_device(), allow_software_fallback=False, is_hw_owned=True).create(
+                av.Codec("h264", "r")
+            )
         except Exception:
             return False
         return True
+
+    @staticmethod
+    def nvdec_library_available() -> bool:
+        """True if NVIDIA's video decoder library can be loaded. Only loads it; nothing is decoded.
+
+        Always True on macOS and other systems, where the CUDA check already fails.
+        """
+        platform = "linux" if sys.platform.startswith("linux") else sys.platform
+        names = NVDEC_LIBRARIES.get(platform)
+        if names is None:
+            return True
+        for name in names:
+            try:
+                ctypes.CDLL(name)
+            except OSError:
+                continue
+            return True
+        return False
 
     @staticmethod
     def probe_video_stream(video_bytes: bytes) -> tuple[str, int, int] | None:
@@ -95,9 +134,13 @@ class Vpdq:
         """
         open_kwargs = {}
         if gpu_decode:
+            if HWAccel is None:
+                raise RuntimeError("This PyAV has no hardware decoding support.")
             # is_hw_owned keeps decoded frames in GPU memory, so only the frames we keep (one per second)
             # are copied back to the CPU by reformat() below, instead of every decoded frame.
-            open_kwargs["hwaccel"] = HWAccel(device_type="cuda", allow_software_fallback=True, is_hw_owned=True)
+            open_kwargs["hwaccel"] = HWAccel(
+                device_type="cuda", device=cuda_device(), allow_software_fallback=True, is_hw_owned=True
+            )
         with av.open(io.BytesIO(video_bytes), **open_kwargs) as container:
             # Check for video in video container
             video_streams = container.streams.video

@@ -69,6 +69,17 @@ Activate the virtual environment first (`.venv\Scripts\activate` in Command Prom
 
 `--gpu-decode` is NVIDIA only. If you see `WARNING: --gpu-decode: no CUDA device found, decoding on the CPU.`, update your NVIDIA driver or leave the flag off. The program keeps going on the CPU.
 
+**GPU decode is off: missing video decoding support**
+
+If you see `WARNING: GPU decode is off: your NVIDIA driver is missing video decoding support.`, CUDA works but NVIDIA's video decoder (NVDEC) can't be found. The program keeps going on the CPU. To fix it:
+
+- Windows: install the latest NVIDIA driver from nvidia.com and restart the PC.
+- Linux: install your driver's decode package, for example `libnvidia-decode-XXX` on Ubuntu/Debian (XXX is your driver version, such as 550) or `nvidia-utils` on Arch.
+- Docker: `NVIDIA_DRIVER_CAPABILITIES` must include `video`, for example `compute,utility,video`.
+- WSL: update the NVIDIA driver on Windows (not inside WSL).
+
+With more than one NVIDIA GPU, see `GPU_DECODE_DEVICE` in [`--gpu-decode`](#--gpu-decode).
+
 **Can't connect to Hydrus**
 
 Hydrus must be running, with the Client API enabled. Check the API URL and port. The default is `http://localhost:45869`.
@@ -111,7 +122,7 @@ A full run in the Windows console:
 </div>
 
 **GUI.** New **Back Up Database** and **Prune Deleted Files** buttons. GPU decode can be turned on with the
-`GPU_DECODE=1` environment variable.
+`GPU_DECODE=1` or `GPU_DECODE=auto` environment variable.
 
 ## Speed optimizations (this fork)
 
@@ -122,11 +133,12 @@ Hydrus is, so your numbers will vary.
 |---|---|---|
 | Startup check for already-hashed files | several minutes on a large database | near-instant |
 | Perceptually hashing videos (`--gpu-decode`, RTX 5070 Ti) | CPU decode | up to about 2× faster on HEVC and 4K; little or no gain on H.264 at 1080p and below |
+| Perceptually hashing videos (`--gpu-decode auto`, RTX 5070 Ti, mixed real files) | CPU decode | about 1.8× faster with a 12-thread CPU, about 3× with 4 cores |
 | Building search tree | 3.3–4.8 s per file | about 0.28 s per file (12–17× faster) |
 | Finding potential duplicates, tool's own search (3,000-file test copy) | 36 min 9 s | 3 min 41 s, about 10× faster |
 | Finding potential duplicates, live run (same query) | 7.66 s per file | 3.82 files per second, about 29× faster |
 
-How much `--gpu-decode` helps depends on your CPU and your files. On a 12-thread CPU with real files, HEVC and 4K videos hashed about 1.4× faster, and H.264 at 1080p and below was about the same speed. With the CPU limited to 4 cores, the same files were 2–4× faster. VP8, VP9 and MPEG-4 can be slower on the GPU.
+How much `--gpu-decode` helps depends on your CPU and your files. On a 12-thread CPU with real files, HEVC and 4K videos hashed about 1.4× faster, and H.264 at 1080p and below was about the same speed. With the CPU limited to 4 cores, the same files were 2–4× faster. VP8, VP9 and MPEG-4 can be slower on the GPU. `--gpu-decode auto` uses both at once and beat either one alone on the same files: 1.5× faster than `--gpu-decode` with 12 threads, 1.1× with 4 cores.
 
 Downloading the next file while the current one hashes,
 and overlapping the Hydrus calls with the search, save more time on top of that.
@@ -197,7 +209,7 @@ More on running the program is in [Usage](./docs/usage.md).
 
 | Flag | Use it when |
 |---|---|
-| [`--gpu-decode`](#--gpu-decode) | You have an NVIDIA GPU and want hashing to use it for video decoding. |
+| [`--gpu-decode`](#--gpu-decode) | You have an NVIDIA GPU and want hashing to use it for video decoding. `--gpu-decode auto` uses the GPU and the CPU together. |
 | [`--skip-repeat-pairs`](#--skip-repeat-pairs) | You want fewer Hydrus API calls while finding potential duplicates. |
 | [`--relink-search-tree`](#--relink-search-tree) | Once, if the program warns about search tree issues. |
 | [`--backup`](#--backup) | You want a copy of the dedupe database before each run changes it. |
@@ -215,15 +227,25 @@ video can't be decoded on the GPU, a warning is logged and that video is hashed 
 python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --gpu-decode
 ```
 
+`--gpu-decode auto` uses the GPU and the CPU at the same time, on different videos. Each video goes where it usually
+hashes faster: HEVC (except very small videos) and H.264 at about 1440p and above go to the GPU, the rest to the CPU.
+When the GPU has nothing to do, it also takes CPU videos. The hashes are the same either way, and at the end it prints
+how many videos went to each. If you have an NVIDIA GPU, this is the one to use. Without one, it just uses the CPU.
+
+```sh
+python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --gpu-decode auto
+```
+
 - Needs an NVIDIA GPU and driver, and a PyAV build with CUDA decoding. The PyAV wheel that `pip install -e .` installs
   on Windows includes it (tested with PyAV 19.0.2). With the flag on, the program prints at startup whether it
   found a CUDA device.
 - AMD and Intel GPUs are not used; leave the flag off on those systems.
 - Only the hashing step uses it. It doesn't speed up "Finding potential duplicates".
 - It helps most with HEVC or 4K videos, or on a slower CPU. If your library is mostly H.264 at 1080p or below and your CPU is fast, you may not see a difference.
-- **Coming soon:** a `--gpu-decode auto` mode that sends each video to whichever is faster for it, GPU or CPU, and uses both at the same time. Until then, leave the flag off if your library is mostly H.264 at 1080p or below.
-- You can also set the environment variable `GPU_DECODE=1`. The GUI ignores command line flags, so use
-  `GPU_DECODE=1` there.
+- You can also set the environment variable `GPU_DECODE=1` or `GPU_DECODE=auto`. The GUI ignores command line
+  flags, so use the environment variable there.
+- With more than one NVIDIA GPU, the first one is used. Set `GPU_DECODE_DEVICE=1` to use the second one (0 is the
+  first), or choose which GPUs the program can see with `CUDA_VISIBLE_DEVICES`.
 
 ### `--skip-repeat-pairs`
 

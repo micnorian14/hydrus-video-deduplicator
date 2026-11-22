@@ -19,9 +19,11 @@ from hydrusvideodeduplicator.hashing import prefers_gpu_decode
 
 
 class TestPrefersGpuDecode(unittest.TestCase):
-    def test_hevc_any_resolution(self):
-        for w, h in [(640, 360), (1920, 1080), (3840, 2160), (0, 0)]:
+    def test_hevc_except_tiny(self):
+        for w, h in [(640, 360), (360, 640), (1920, 1080), (3840, 2160)]:
             self.assertTrue(prefers_gpu_decode("hevc", w, h))
+        for w, h in [(320, 240), (480, 270), (0, 0)]:  # tiny HEVC: the CPU is faster
+            self.assertFalse(prefers_gpu_decode("hevc", w, h))
 
     def test_h264_by_pixel_count(self):
         self.assertFalse(prefers_gpu_decode("h264", 888, 500))

@@ -43,6 +43,48 @@ CODE_TOKEN_RE = re.compile(
 )
 
 
+def memory_status() -> tuple[int, int] | None:
+    """(available, total) physical RAM in bytes, or None if it can't be read."""
+    try:
+        if os.name == "nt":
+            import ctypes
+
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            status = MEMORYSTATUSEX()
+            status.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+            if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                return None
+            return int(status.ullAvailPhys), int(status.ullTotalPhys)
+        if os.path.exists("/proc/meminfo"):
+            values = {}
+            with open("/proc/meminfo", encoding="ascii") as meminfo:
+                for line in meminfo:
+                    key, _, rest = line.partition(":")
+                    if key in ("MemAvailable", "MemTotal"):
+                        values[key] = int(rest.split()[0]) * 1024
+            if "MemAvailable" in values and "MemTotal" in values:
+                return values["MemAvailable"], values["MemTotal"]
+            return None
+        import psutil  # macOS and others, if installed
+
+        memory = psutil.virtual_memory()
+        return int(memory.available), int(memory.total)
+    except Exception:
+        return None
+
+
 def style_code_spans(text: str, base_style: str | None = None) -> Text:
     """Plain text (or base_style) with flags, env vars, and key combos in magenta. Brackets are literal."""
     out = Text()

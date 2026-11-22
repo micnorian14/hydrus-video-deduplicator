@@ -29,7 +29,7 @@ dependencies = [
     "typer",
     "requests",
     # vpdqpy dependencies
-    "av",
+    "av>=17",  # 17+ for GPU decode; also the newest PyAV for Python 3.10 and 3.11
     "hvdaccelerators>=0.4.0",
 ]
 
