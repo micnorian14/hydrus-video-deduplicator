@@ -190,6 +190,13 @@ class TestAutoPipeline(unittest.TestCase):
         self.assertEqual(deduper.db.commits, 2)  # every 4 saved videos, like the normal loop
         self.assertEqual(deduper.db.threads, {threading.main_thread().name})  # DB only touched by the main thread
 
+    def test_gpu_fallback_counts_as_cpu(self):
+        hashes = ["gpu0", "gpu1", "cpu0"]
+        with mock.patch.object(dedup, "last_decode_used_gpu", lambda: False):  # e.g. NVDEC couldn't decode them
+            stats, decoded_on = self._run(self._deduper(gpu_available=True), hashes)
+        self.assertEqual((stats.gpu_decoded_count, stats.cpu_decoded_count), (0, 3))
+        self.assertTrue(decoded_on["gpu0"] and decoded_on["gpu1"])  # they were still sent to the GPU worker
+
     def test_no_cuda_device_all_cpu(self):
         hashes = ["gpu0", "cpu0", "gpu1"]
         stats, decoded_on = self._run(self._deduper(gpu_available=False), hashes)

@@ -51,6 +51,11 @@ def video_prefers_gpu_decode(video: bytes) -> bool:
     return prefers_gpu_decode(*info)
 
 
+def last_decode_used_gpu() -> bool | None:
+    """Whether the last compute_phash() on this thread really decoded on the GPU (None if unknown)."""
+    return Vpdq.last_decode_used_gpu()
+
+
 def encode_phash_to_str(phash: VpdqHash) -> str:
     """
     Encode the perceptual hash of a video into a string.

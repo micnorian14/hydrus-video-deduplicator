@@ -28,7 +28,7 @@ from .client import HVDClient
 from .db import DedupeDB, vptree
 from .dedup_util import console_print, print_success, print_user, style_user_text
 from .config import GPU_DECODE_AUTO
-from .hashing import compute_phash, video_prefers_gpu_decode
+from .hashing import compute_phash, last_decode_used_gpu, video_prefers_gpu_decode
 from .page_logger import HydrusPageLogger, resolve_failed_page_name
 from hvdaccelerators import vpdq
 
@@ -373,6 +373,7 @@ class PerceptualHashingStats:
     failed_from_api_errors_count: int = 0
     failed_from_phash_count: int = 0
     # --gpu-decode auto only: videos decoded on each (failed hashes included, Hydrus download errors not).
+    # A GPU video that fell back to CPU decoding counts as CPU.
     gpu_decoded_count: int = 0
     cpu_decoded_count: int = 0
 
@@ -765,11 +766,13 @@ class HydrusVideoDeduplicator:
                     del item
                     result = filehasher.phash_fetched_file(file_hash, fetched, gpu_decode=on_gpu)
                     decoded = not isinstance(fetched, HydrusApiException)
+                    used_gpu = last_decode_used_gpu() if on_gpu else False
+                    decoded_on_gpu = on_gpu if used_gpu is None else used_gpu
                     del fetched
                     with cond:
                         busy[on_gpu] = False
                         cond.notify_all()
-                    results.put((result, on_gpu, decoded))
+                    results.put((result, decoded_on_gpu, decoded))
             except BaseException as exc:
                 failure.append(exc)
 

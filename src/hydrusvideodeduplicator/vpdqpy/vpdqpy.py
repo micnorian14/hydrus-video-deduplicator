@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import logging
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -22,6 +23,13 @@ log.setLevel(logging.CRITICAL)
 DOWNSCALE_DIMENSIONS = 512
 
 VpdqHash: TypeAlias = vpdq.VpdqHash
+
+# Per thread: whether the last computeHash() really decoded on the GPU (see Vpdq.last_decode_used_gpu).
+_decode_state = threading.local()
+
+
+class NotDecodedOnGpuError(Exception):
+    """GPU decoding was asked for, but FFmpeg fell back to (single-threaded) software decoding for this video."""
 
 
 class Vpdq:
@@ -98,8 +106,13 @@ class Vpdq:
                 raise ValueError("Video stream not found.")
 
             video = container.streams.video[0]
-            if not gpu_decode:
+            # is_hwaccel is False when this FFmpeg has no CUDA decoder for the codec. Then it's software decoding,
+            # so make it multi-threaded like CPU decoding (the GPU path would otherwise decode on one core).
+            on_gpu = gpu_decode and video.codec_context.is_hwaccel
+            if not on_gpu:
                 video.thread_type = "AUTO"
+            _decode_state.used_gpu = on_gpu
+            checked_first_frame = not on_gpu
 
             average_fps: int = 1
             # Some videos, like small GIFs, will have a NoneType FPS
@@ -118,6 +131,13 @@ class Vpdq:
             while True:
                 try:
                     frame = next(frame_generator)
+                    if not checked_first_frame:
+                        checked_first_frame = True
+                        if frame.format.name != "cuda":
+                            # NVDEC can't decode this stream (e.g. H.264 4:4:4, or a profile or size the card
+                            # doesn't support), so FFmpeg fell back to single-threaded software decoding.
+                            # Stop before anything is hashed; computeHash() redoes it with multi-threaded CPU decoding.
+                            raise NotDecodedOnGpuError(f"no hardware decoding for this video ({frame.format.name})")
                     if frame_index % average_fps == 0:
                         yield frame.reformat(
                             width=DOWNSCALE_DIMENSIONS,
@@ -139,6 +159,7 @@ class Vpdq:
         if video is None:
             raise ValueError
 
+        _decode_state.used_gpu = None
         if gpu_decode:
             try:
                 return Vpdq._hash_video_bytes(video, num_threads, gpu_decode=True)
@@ -146,6 +167,12 @@ class Vpdq:
                 # Anything the GPU can't handle is retried with normal CPU decoding.
                 log.warning(f"GPU decode failed, falling back to CPU decode: {exc}")
         return Vpdq._hash_video_bytes(video, num_threads, gpu_decode=False)
+
+    @staticmethod
+    def last_decode_used_gpu() -> bool | None:
+        """True if the last computeHash() on this thread decoded on the GPU, False if on the CPU (including a GPU
+        request that fell back to the CPU), None if unknown (e.g. the video failed before decoding started)."""
+        return getattr(_decode_state, "used_gpu", None)
 
     @staticmethod
     def _hash_video_bytes(video: bytes, num_threads: int, gpu_decode: bool) -> VpdqHash:
