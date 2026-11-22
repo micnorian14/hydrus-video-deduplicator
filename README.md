@@ -221,6 +221,7 @@ python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --gpu-decode
 - AMD and Intel GPUs are not used; leave the flag off on those systems.
 - Only the hashing step uses it. It doesn't speed up "Finding potential duplicates".
 - It helps most with HEVC or 4K videos, or on a slower CPU. If your library is mostly H.264 at 1080p or below and your CPU is fast, you may not see a difference.
+- **Coming soon:** a `--gpu-decode auto` mode that sends each video to whichever is faster for it, GPU or CPU, and uses both at the same time. Until then, leave the flag off if your library is mostly H.264 at 1080p or below.
 - You can also set the environment variable `GPU_DECODE=1`. The GUI ignores command line flags, so use
   `GPU_DECODE=1` there.
 
