@@ -9,9 +9,7 @@
 This is a fork of [Hydrus Video Deduplicator](https://github.com/hydrusvideodeduplicator/hydrus-video-deduplicator). It does the same job and gives the same results, faster.
 
 - Every speed change gives identical hashes, search tree and potential duplicate pairs.
-- Everything that behaves differently (GPU decode, skipping repeat pair sends, search tree repair, backups, pruning
-  deleted files or broken entries) is opt-in and off by default, except that failed files are sent to a Hydrus page
-  named `failed` if that page exists.
+- New features are off unless you turn them on. The one exception: failed files go to a Hydrus page named `failed`, if you've made one.
 - The database format is unchanged, so a database used by this fork still works with the original program.
 
 It also adds `--relink-search-tree` to repair a damaged search tree, as reported in [issue #80](https://github.com/hydrusvideodeduplicator/hydrus-video-deduplicator/issues/80), and `--prune-orphans` to remove videos whose perceptual hash is missing.
@@ -21,7 +19,59 @@ videos perceptually hashed.
 
 Please report problems with this fork on [this fork's issues page](https://github.com/micnorian14/hydrus-video-deduplicator/issues), not on the original project.
 
-The original README follows further down, from [Hydrus Video Deduplicator](#hydrus-video-deduplicator).
+## Quick start
+
+There is no .exe for this fork. You run it from source with Python. You need [Python](https://www.python.org/downloads/) 3.10 or newer and [Git](https://git-scm.com/downloads). On Windows, tick "Add python.exe to PATH" in the Python installer, and use Command Prompt (cmd.exe), not PowerShell.
+
+```sh
+git clone -b gpu-decode https://github.com/micnorian14/hydrus-video-deduplicator.git
+cd hydrus-video-deduplicator
+python -m venv .venv
+.venv\Scripts\activate          # Linux/macOS: source .venv/bin/activate
+python -m pip install -e .
+```
+
+`gpu-decode` is this fork's default branch, so a plain clone gets it. For the GUI, also run `python -m pip install -e ".[gui]"`. To update later, run `git pull` in the same folder.
+
+To get a Hydrus API key, enable the Client API if it is not already on: in Hydrus, go to `services->edit` and give it a port (the default is 45869). Then go to `services->review` and create a new access key with `permits everything` enabled. Do not set blacklist or whitelist filters. See [Usage](./docs/usage.md) and the [Hydrus Client API docs](https://hydrusnetwork.github.io/hydrus/client_api.html) for details.
+
+From the activated virtual environment, run:
+
+```sh
+python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY"
+```
+
+Or save this as a `.bat` file in the repo folder and double-click it:
+
+```bat
+@echo off
+cd /d "%~dp0"
+REM Remove --gpu-decode if you do not have an NVIDIA GPU.
+.venv\Scripts\python.exe -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --gpu-decode --skip-repeat-pairs
+pause
+```
+
+## Common problems
+
+**`'python' is not recognized` or `'git' is not recognized`**
+
+Reinstall Python or Git and tick "Add to PATH" (for Python, "Add python.exe to PATH"). Then open a new Command Prompt window.
+
+**Running in PowerShell instead of cmd**
+
+The activate command is different in PowerShell. Use Command Prompt (cmd.exe), where it is `.venv\Scripts\activate`. In PowerShell it is `.venv\Scripts\Activate.ps1`.
+
+**Forgetting to activate the venv, or `No module named hydrusvideodeduplicator`**
+
+Activate the virtual environment first (`.venv\Scripts\activate` in Command Prompt), or use the `.bat` above, which calls `.venv\Scripts\python.exe` directly. If you have not installed the fork yet, run `python -m pip install -e .` after activating.
+
+**`--gpu-decode` says no CUDA device**
+
+`--gpu-decode` is NVIDIA only. If you see `WARNING: --gpu-decode: no CUDA device found, decoding on the CPU.`, update your NVIDIA driver or leave the flag off. The program keeps going on the CPU.
+
+**Can't connect to Hydrus**
+
+Hydrus must be running, with the Client API enabled. Check the API URL and port. The default is `http://localhost:45869`.
 
 ## Built for backwards compatibility
 
@@ -33,23 +83,7 @@ out because they risked compatibility with existing databases.
 ## Install this fork
 
 The Windows exe on the original releases page and `pip install hydrusvideodeduplicator` both install the original
-program, without these changes. To use this fork, install it from source. You need [Python](https://www.python.org/downloads/)
-3.10 or newer and [Git](https://git-scm.com/downloads). On Windows, run these commands in Command Prompt (cmd.exe),
-not PowerShell.
-
-```sh
-git clone -b gpu-decode https://github.com/micnorian14/hydrus-video-deduplicator.git
-cd hydrus-video-deduplicator
-python -m venv .venv
-.venv\Scripts\activate          # Linux/macOS: source .venv/bin/activate
-python -m pip install -e .
-```
-
-`gpu-decode` is this fork's default branch, so a plain clone gets it. For the GUI, also run
-`python -m pip install -e ".[gui]"`.
-
-Run it with `python -m hydrusvideodeduplicator` from the activated virtual environment, everywhere the original docs
-say to run the exe. To update later, run `git pull` in the same folder.
+program, without these changes. To use this fork, follow [Quick start](#quick-start).
 
 ## What's new in this fork
 
@@ -287,6 +321,11 @@ Failed files are sent to a Hydrus page named `failed` by default. Create a page 
 - If the page does not exist, the run continues as usual. Only if files failed to hash, it prints: `Tip: Create a Hydrus page with the name 'failed' before running the program to see any files that failed to hash.`
 - `--failed-page-name` is still accepted. Use `--failed-page-name=yourname` (or the Failed Page Name box in the GUI, or `FAILED_PAGE_NAME`) to use a different page. The page is looked up once per run, so a missing page does not slow hashing or print errors.
 
+The original upstream README is collapsed below.
+
+<details>
+<summary>Original README (upstream)</summary>
+
 ---
 
 # Hydrus Video Deduplicator
@@ -351,3 +390,5 @@ Create an issue on GitHub for any problems/concerns. Provide as much detail as p
 Email `hydrusvideodeduplicator@gmail.com` for other general questions/concerns.
 
 Message `@applenanner` on the [Hydrus Discord](https://discord.gg/wPHPCUZ) for other general questions/concerns.
+
+</details>
