@@ -18,7 +18,7 @@ from hydrusvideodeduplicator.client import (
     HVDClient,
     create_client,
 )
-from hydrusvideodeduplicator.config import Config
+from hydrusvideodeduplicator.config import Config, normalize_gpu_decode_args, resolve_gpu_decode
 from hydrusvideodeduplicator.db import DedupeDB
 from hydrusvideodeduplicator.db_tools import check_database, run_backup, run_prune, run_prune_orphans
 from hydrusvideodeduplicator.dedup import HydrusVideoDeduplicator, print_search_cache_warning
@@ -112,8 +112,13 @@ def main(
     ] = config.job_count,
     gpu_decode: Annotated[
         Optional[bool],
-        typer.Option(help="Decode videos on an NVIDIA GPU (CUDA). Falls back to CPU if a video can't be GPU decoded."),
+        typer.Option(
+            help="Decode videos on an NVIDIA GPU (CUDA). Falls back to CPU if a video can't be GPU decoded. "
+            "'--gpu-decode auto' decodes each video on the GPU or the CPU, whichever is usually faster for it."
+        ),
     ] = config.gpu_decode,
+    # Set by '--gpu-decode auto' (see normalize_gpu_decode_args) or GPU_DECODE=auto.
+    gpu_decode_auto: Annotated[Optional[bool], typer.Option(hidden=True)] = config.gpu_decode_auto,
     skip_repeat_pairs: Annotated[
         Optional[bool],
         typer.Option(help="Send each pair to Hydrus once per run instead of twice (faster)."),
@@ -320,7 +325,7 @@ def main(
         job_count=job_count,
         failed_page_name=failed_page_name,
         custom_query=query,
-        gpu_decode=bool(gpu_decode),
+        gpu_decode=resolve_gpu_decode(gpu_decode, gpu_decode_auto),
         skip_repeat_pairs=bool(skip_repeat_pairs),
     )
 
@@ -375,7 +380,7 @@ def run_main(gui: bool, is_executable: bool):
                 # Same as typer.run(main), plus the help text and the optimization switches at the end of --help.
                 app = typer.Typer(add_completion=False)
                 app.command(help=CLI_HELP, epilog=CLI_EPILOG)(main)
-                app()
+                app(args=normalize_gpu_decode_args(sys.argv[1:]))
             except KeyboardInterrupt as exc:
                 raise typer.Exit(-1) from exc
             finally:

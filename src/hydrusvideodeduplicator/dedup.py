@@ -27,7 +27,8 @@ import hydrusvideodeduplicator.hydrus_api as hydrus_api
 from .client import HVDClient
 from .db import DedupeDB, vptree
 from .dedup_util import console_print, print_success, print_user, style_user_text
-from .hashing import compute_phash
+from .config import GPU_DECODE_AUTO
+from .hashing import compute_phash, video_prefers_gpu_decode
 from .page_logger import HydrusPageLogger, resolve_failed_page_name
 from hvdaccelerators import vpdq
 
@@ -137,12 +138,15 @@ SEARCH_CACHE_WARNING = (
 
 GPU_DECODE_ON = "Using GPU decode (CUDA)."
 GPU_DECODE_NO_DEVICE = "WARNING: --gpu-decode: no CUDA device found, decoding on the CPU."
+GPU_DECODE_AUTO_ON = "Using GPU decode (auto)."
+GPU_DECODE_AUTO_NO_DEVICE = "WARNING: --gpu-decode auto: no CUDA device found, decoding on the CPU."
 
 
-def print_gpu_decode_status() -> None:
-    """Display-only: say once whether --gpu-decode found a CUDA device, with a blank line after.
+def print_gpu_decode_status(auto: bool = False) -> bool:
+    """Say once whether --gpu-decode found a CUDA device, with a blank line after. Returns True if it did.
 
-    Decoding itself is unchanged.
+    For plain --gpu-decode this is display only (decoding falls back to the CPU per video by itself).
+    --gpu-decode auto uses the result to decide whether to start its GPU worker.
     """
     try:
         from .vpdqpy.vpdqpy import Vpdq
@@ -151,10 +155,24 @@ def print_gpu_decode_status() -> None:
     except Exception:
         available = False
     if available:
-        print(f"[blue]{GPU_DECODE_ON}")
+        print(f"[blue]{GPU_DECODE_AUTO_ON if auto else GPU_DECODE_ON}")
     else:
-        console_print(style_user_text(GPU_DECODE_NO_DEVICE), highlight=False)
+        console_print(style_user_text(GPU_DECODE_AUTO_NO_DEVICE if auto else GPU_DECODE_NO_DEVICE), highlight=False)
     print()
+    return available
+
+
+def gpu_decode_auto_summary(gpu_count: int, cpu_count: int) -> str:
+    return f"GPU decode (auto): {gpu_count} {_plural(gpu_count, 'video')} decoded on the GPU, {cpu_count} on the CPU."
+
+
+# --gpu-decode auto: how many downloaded videos may wait for a free worker (on top of the two being hashed).
+AUTO_READY_FILES = 2
+# --gpu-decode auto: when the GPU worker is idle, no video is waiting for it and the CPU worker is busy, the GPU worker
+# takes the oldest waiting CPU video (decoded on the GPU) instead of sitting idle. Hashes are identical either way.
+# Only this direction: the GPU path barely uses the CPU, while a heavy GPU video (e.g. H.264 4K) on the CPU is
+# several times slower and was measured to make the whole run slower.
+AUTO_SHARE_WORK = True
 
 
 def print_search_cache_warning() -> None:
@@ -291,9 +309,11 @@ class FileHasher:
             raise HydrusApiException(exc)
         return response.content
 
-    def _phash_file(self, file: bytes) -> bytes:
+    def _phash_file(self, file: bytes, gpu_decode: bool | None = None) -> bytes:
+        if gpu_decode is None:
+            gpu_decode = self.gpu_decode
         try:
-            phash = compute_phash(file, self.num_threads, self.gpu_decode)
+            phash = compute_phash(file, self.num_threads, gpu_decode)
             phash_bytes: bytes = phash.bytes
         except Exception as exc:
             raise FailedPerceptualHashException(str(exc))
@@ -322,14 +342,17 @@ class FileHasher:
             return exc
 
     def phash_fetched_file(
-        self, file_hash: str, file_or_error: bytes | HydrusApiException
+        self, file_hash: str, file_or_error: bytes | HydrusApiException, gpu_decode: bool | None = None
     ) -> PerceptuallyHashedFile | FailedPerceptuallyHashedFile:
-        """Calculates the perceptual hash of an already fetched file and returns the result."""
+        """Calculates the perceptual hash of an already fetched file and returns the result.
+
+        gpu_decode overrides this FileHasher's setting for this one file (used by --gpu-decode auto).
+        """
         if isinstance(file_or_error, HydrusApiException):
             return FailedPerceptuallyHashedFile(file_hash, file_or_error)
 
         try:
-            phash = self._phash_file(file_or_error)
+            phash = self._phash_file(file_or_error, gpu_decode)
         except FailedPerceptualHashException as exc:
             return FailedPerceptuallyHashedFile(file_hash, exc)
 
@@ -349,6 +372,9 @@ class PerceptualHashingStats:
     success_hash_count: int = 0
     failed_from_api_errors_count: int = 0
     failed_from_phash_count: int = 0
+    # --gpu-decode auto only: videos decoded on each (failed hashes included, Hydrus download errors not).
+    gpu_decoded_count: int = 0
+    cpu_decoded_count: int = 0
 
 
 class CancelledPerceptualHashException(Exception):
@@ -412,13 +438,16 @@ class HydrusVideoDeduplicator:
         custom_query: Sequence[str] | None = None,
         update_progress_callback: UpdateDedupeProgressCallback | None = None,
         should_skip_step_fn: Callable[[], bool] | None = None,
-        gpu_decode: bool = False,
+        gpu_decode: bool | str = False,
         skip_repeat_pairs: bool = False,
     ):
         self.db = db
+        # False: CPU decode. True: GPU decode (--gpu-decode). GPU_DECODE_AUTO: --gpu-decode auto.
         self.gpu_decode = gpu_decode
+        self.gpu_decode_auto = gpu_decode == GPU_DECODE_AUTO
+        self.gpu_decode_available = False
         if gpu_decode:
-            print_gpu_decode_status()
+            self.gpu_decode_available = print_gpu_decode_status(auto=self.gpu_decode_auto)
         self.skip_repeat_pairs = skip_repeat_pairs
         self.client = client
         self.similarity_threshold = similarity_threshold
@@ -488,6 +517,8 @@ class HydrusVideoDeduplicator:
                 finally:
                     if self.update_progress_callback:
                         self.update_progress_callback(NoneProgress(None))
+                    if self.gpu_decode_auto and (stats.gpu_decoded_count or stats.cpu_decoded_count):
+                        print(f"[blue]{gpu_decode_auto_summary(stats.gpu_decoded_count, stats.cpu_decoded_count)}")
                     # Print some useful stats and info for users
                     total_failures = stats.failed_from_api_errors_count + stats.failed_from_phash_count
                     if total_failures > 0:
@@ -587,8 +618,11 @@ class HydrusVideoDeduplicator:
                 unit="video",
                 colour="GREEN",
             ) as pbar:
+                if self.gpu_decode_auto:
+                    self._phash_videos_auto(list(video_hashes), FileHasher(self.client, self.job_count), stats, pbar)
+                    gc.collect()
+                    return stats
                 filehasher = FileHasher(self.client, self.job_count, self.gpu_decode)
-                successful_phashed_count = 0
                 # Download the next file from Hydrus in a background thread while the current file is hashed.
                 # Only one file is fetched ahead, and results are still processed and saved one at a time
                 # in the original order, so the database writes are exactly the same as before.
@@ -610,31 +644,7 @@ class HydrusVideoDeduplicator:
                             next_fetch = prefetcher.submit(filehasher.fetch_file_or_error, video_hashes[index + 1])
                         result = filehasher.phash_fetched_file(video_hash, fetched)
                         del fetched
-                        if isinstance(result, FailedPerceptuallyHashedFile):
-                            # We only want to add the failure to the page if the file was the actual cause of failure.
-                            if isinstance(result.exc, HydrusApiException):
-                                stats.failed_from_api_errors_count += 1
-                                # Clear the bar first so these lines start on their own line, then redraw the bar below.
-                                # file=pbar.fp makes this work for the console and for tests that capture the bar.
-                                with pbar.external_write_mode(file=pbar.fp):
-                                    print("[red]Hydrus API error during perceptual hashing:")
-                                    console_print(Text(str(result.exc)), highlight=False)
-                            else:
-                                stats.failed_from_phash_count += 1
-                                with pbar.external_write_mode(file=pbar.fp):
-                                    print("[red]Failed to perceptually hash a file.")
-                                    print(f"[red]Failed file SHA256 hash: {result.file_hash}")
-                                    console_print(Text(str(result.exc)), highlight=False)
-                                if self.page_logger:
-                                    self.page_logger.add_failed_video(result.file_hash)
-                        else:
-                            self.db.add_to_phashed_files_queue(result.file_hash, result.perceptual_hash)
-                            stats.success_hash_count += 1
-                            successful_phashed_count += 1
-                            # Commit periodically to save progress in case something fails.
-                            COMMIT_BATCH_SIZE = 4
-                            if successful_phashed_count % COMMIT_BATCH_SIZE == 0:
-                                self.db.commit()
+                        self._save_phash_result(result, stats, pbar)
 
                         # Collect garbage now to avoid huge memory usage from the video files and frames.
                         gc.collect()
@@ -648,6 +658,159 @@ class HydrusVideoDeduplicator:
             raise CancelledPerceptualHashException(stats)
         gc.collect()
         return stats
+
+    def _save_phash_result(
+        self, result: PerceptuallyHashedFile | FailedPerceptuallyHashedFile, stats: PerceptualHashingStats, pbar
+    ) -> None:
+        """Record one hashing result: queue it in the DB (commit every 4), or report the failure. Main thread only."""
+        if isinstance(result, FailedPerceptuallyHashedFile):
+            # We only want to add the failure to the page if the file was the actual cause of failure.
+            if isinstance(result.exc, HydrusApiException):
+                stats.failed_from_api_errors_count += 1
+                # Clear the bar first so these lines start on their own line, then redraw the bar below.
+                # file=pbar.fp makes this work for the console and for tests that capture the bar.
+                with pbar.external_write_mode(file=pbar.fp):
+                    print("[red]Hydrus API error during perceptual hashing:")
+                    console_print(Text(str(result.exc)), highlight=False)
+            else:
+                stats.failed_from_phash_count += 1
+                with pbar.external_write_mode(file=pbar.fp):
+                    print("[red]Failed to perceptually hash a file.")
+                    print(f"[red]Failed file SHA256 hash: {result.file_hash}")
+                    console_print(Text(str(result.exc)), highlight=False)
+                if self.page_logger:
+                    self.page_logger.add_failed_video(result.file_hash)
+        else:
+            self.db.add_to_phashed_files_queue(result.file_hash, result.perceptual_hash)
+            stats.success_hash_count += 1
+            # Commit periodically to save progress in case something fails.
+            COMMIT_BATCH_SIZE = 4
+            if stats.success_hash_count % COMMIT_BATCH_SIZE == 0:
+                self.db.commit()
+
+    def _phash_videos_auto(
+        self, video_hashes: list[str], filehasher: FileHasher, stats: PerceptualHashingStats, pbar
+    ) -> None:
+        """
+        --gpu-decode auto: a GPU worker and a CPU worker hash different videos at the same time.
+
+        * One download thread fetches the videos from Hydrus in order, at most AUTO_READY_FILES ahead, and reads each
+          video's codec and resolution from its header (no decoding) to pick GPU or CPU (prefers_gpu_decode).
+        * Each worker takes the oldest waiting video meant for it. With AUTO_SHARE_WORK, an idle GPU worker also takes
+          the oldest waiting CPU video while the CPU worker is busy. Hashes are identical on the GPU and the CPU, so
+          this only changes speed.
+        * A video that fails on the GPU is retried on the CPU (compute_phash), same as plain --gpu-decode.
+        * Results come back to this (main) thread, which alone does the DB writes, the commit every 4 videos, the
+          failed-page and progress updates (_save_phash_result), same as the normal loop. The order can differ.
+        * No CUDA device: everything is hashed by the CPU worker.
+        * Ctrl+C or the GUI's skip: no more videos are handed out and this returns right away. Videos still being
+          hashed are not saved and are hashed again next run, like an interrupted video in the normal loop.
+        """
+        use_gpu = self.gpu_decode_available
+        total = len(video_hashes)
+        cond = threading.Condition()
+        waiting: list = []  # (file_hash, file bytes or HydrusApiException, prefers GPU)
+        busy = {True: False, False: False}  # by worker: True = GPU worker, False = CPU worker
+        fetch_done = threading.Event()
+        stop = threading.Event()
+        results: queue.Queue = queue.Queue()
+        failure: list[BaseException] = []
+
+        def fetch_all() -> None:
+            try:
+                for file_hash in video_hashes:
+                    with cond:
+                        while len(waiting) >= AUTO_READY_FILES and not stop.is_set():
+                            cond.wait(0.5)
+                    if stop.is_set():
+                        return
+                    fetched = filehasher.fetch_file_or_error(file_hash)
+                    wants_gpu = (
+                        use_gpu and not isinstance(fetched, HydrusApiException) and video_prefers_gpu_decode(fetched)
+                    )
+                    with cond:
+                        waiting.append((file_hash, fetched, wants_gpu))
+                        cond.notify_all()
+                    del fetched
+            except BaseException as exc:
+                failure.append(exc)
+            finally:
+                fetch_done.set()
+                with cond:
+                    cond.notify_all()
+
+        def take(on_gpu: bool):
+            with cond:
+                while not stop.is_set():
+                    index = next((i for i, item in enumerate(waiting) if item[2] == on_gpu), None)
+                    if index is None and waiting and AUTO_SHARE_WORK and on_gpu and busy[False]:
+                        index = 0
+                    if index is not None:
+                        busy[on_gpu] = True
+                        item = waiting.pop(index)
+                        cond.notify_all()
+                        return item
+                    if fetch_done.is_set() and not waiting:
+                        return None
+                    cond.wait(0.5)
+                return None
+
+        def work(on_gpu: bool) -> None:
+            try:
+                while not stop.is_set():
+                    item = take(on_gpu)
+                    if item is None:
+                        return
+                    file_hash, fetched, _ = item
+                    del item
+                    result = filehasher.phash_fetched_file(file_hash, fetched, gpu_decode=on_gpu)
+                    decoded = not isinstance(fetched, HydrusApiException)
+                    del fetched
+                    with cond:
+                        busy[on_gpu] = False
+                        cond.notify_all()
+                    results.put((result, on_gpu, decoded))
+            except BaseException as exc:
+                failure.append(exc)
+
+        workers = [threading.Thread(target=work, args=(False,), name="hvd-hash-cpu", daemon=True)]
+        if use_gpu:
+            workers.append(threading.Thread(target=work, args=(True,), name="hvd-hash-gpu", daemon=True))
+        threads = [threading.Thread(target=fetch_all, name="hvd-prefetch", daemon=True), *workers]
+        for thread in threads:
+            thread.start()
+        try:
+            for _ in range(total):
+                if self.update_progress_callback:
+                    self.update_progress_callback(HashingProgress(complete=pbar.n + 1, total=pbar.total))
+                while True:
+                    if self.should_skip_step_fn and self.should_skip_step_fn():
+                        return
+                    try:
+                        result, on_gpu, decoded = results.get(timeout=0.2)
+                        break
+                    except queue.Empty:
+                        if failure:
+                            raise failure[0]
+                        if not any(worker.is_alive() for worker in workers) and results.empty():
+                            return  # only if a worker died without reporting why; nothing is left to save
+                if decoded:
+                    if on_gpu:
+                        stats.gpu_decoded_count += 1
+                    else:
+                        stats.cpu_decoded_count += 1
+                self._save_phash_result(result, stats, pbar)
+                del result
+                # Collect garbage now to avoid huge memory usage from the video files and frames.
+                gc.collect()
+                pbar.update(1)
+                if self.update_progress_callback:
+                    self.update_progress_callback(HashingProgress(complete=pbar.n, total=pbar.total))
+        finally:
+            stop.set()
+            with cond:
+                waiting.clear()
+                cond.notify_all()
 
     def _find_potential_duplicates_pipelined(self, tree, files, search_threshold, send=None) -> int:
         """

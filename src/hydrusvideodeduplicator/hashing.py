@@ -21,6 +21,36 @@ def compute_phash(video: Path | str | bytes, num_threads: int = 0, gpu_decode: b
     return phash
 
 
+# --gpu-decode auto: H.264 at about 1440p and above goes to the GPU. Measured by pixel count so portrait videos
+# (e.g. 2160x3840) count the same as landscape ones. 90% of 2560x1440 leaves room for slightly cropped videos while
+# 1080p (about 2.1 million pixels) stays well below.
+GPU_DECODE_MIN_H264_PIXELS = 2560 * 1440 * 9 // 10
+
+
+def prefers_gpu_decode(codec: str | None, width: int | None, height: int | None) -> bool:
+    """
+    --gpu-decode auto: True if a video with this codec and resolution is usually hashed faster with GPU decoding.
+
+    Fixed rules from benchmarks on real files (RTX 5070 Ti, 12 and 4 CPU cores): HEVC at any resolution and H.264 at
+    about 1440p and above. Everything else (H.264 at 1080p and below, VP8, VP9, MPEG-4, AV1, unknown) is usually as
+    fast or faster on the CPU. Hashes are identical either way, so this only affects speed.
+    """
+    codec = (codec or "").lower()
+    if codec in ("hevc", "h265"):
+        return True
+    if codec == "h264":
+        return max(width or 0, 0) * max(height or 0, 0) >= GPU_DECODE_MIN_H264_PIXELS
+    return False
+
+
+def video_prefers_gpu_decode(video: bytes) -> bool:
+    """prefers_gpu_decode() for a video file's bytes. Reads only the container header; False if it can't."""
+    info = Vpdq.probe_video_stream(video)
+    if info is None:
+        return False
+    return prefers_gpu_decode(*info)
+
+
 def encode_phash_to_str(phash: VpdqHash) -> str:
     """
     Encode the perceptual hash of a video into a string.

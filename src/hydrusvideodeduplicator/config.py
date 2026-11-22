@@ -33,6 +33,47 @@ def validate_json_array_env_var(env_var: str | None, err_msg: str) -> list | Non
     return env_var_list
 
 
+# --gpu-decode auto / GPU_DECODE=auto: each video is decoded on the GPU or the CPU, whichever is usually faster for it.
+GPU_DECODE_AUTO = "auto"
+
+
+def normalize_gpu_decode_args(args: list[str]) -> list[str]:
+    """
+    Let --gpu-decode take an optional value without changing how the flag already works.
+
+    '--gpu-decode auto' and '--gpu-decode=auto' become the hidden '--gpu-decode-auto' flag. A plain '--gpu-decode' or
+    '--no-gpu-decode' also gets '--no-gpu-decode-auto', so on the command line the last one given wins, including over
+    GPU_DECODE=auto. Everything else is passed through unchanged.
+    """
+    out: list[str] = []
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--":
+            out.extend(args[i:])
+            break
+        if arg.lower() == "--gpu-decode=" + GPU_DECODE_AUTO:
+            out.append("--gpu-decode-auto")
+            i += 1
+            continue
+        if arg == "--gpu-decode" and i + 1 < len(args) and args[i + 1].lower() == GPU_DECODE_AUTO:
+            out.append("--gpu-decode-auto")
+            i += 2
+            continue
+        out.append(arg)
+        if arg in ("--gpu-decode", "--no-gpu-decode"):
+            out.append("--no-gpu-decode-auto")
+        i += 1
+    return out
+
+
+def resolve_gpu_decode(gpu_decode: bool | None, gpu_decode_auto: bool | None) -> bool | str:
+    """The gpu_decode value for HydrusVideoDeduplicator: GPU_DECODE_AUTO, True (always GPU) or False (CPU)."""
+    if gpu_decode_auto:
+        return GPU_DECODE_AUTO
+    return bool(gpu_decode)
+
+
 class Config:
     """Hydrus Video Deduplicator Config"""
 
@@ -48,6 +89,7 @@ class Config:
         self.job_count = None
         self.hvd_gui = None
         self.gpu_decode = False
+        self.gpu_decode_auto = False
 
     @staticmethod
     def _load(config_map: dict[str, str | None]):
@@ -99,7 +141,10 @@ class Config:
         config.hvd_gui = config_map.get("HVD_GUI", False)
 
         # Use the NVIDIA GPU (CUDA/NVDEC) to decode videos. Hashes are identical to CPU decoding.
-        config.gpu_decode = str(config_map.get("GPU_DECODE", "0")).strip().lower() in ("1", "true", "yes", "on")
+        gpu_decode_setting = str(config_map.get("GPU_DECODE", "0")).strip().lower()
+        config.gpu_decode = gpu_decode_setting in ("1", "true", "yes", "on")
+        # GPU_DECODE=auto: decode each video on the GPU or the CPU, whichever is usually faster for it.
+        config.gpu_decode_auto = gpu_decode_setting == GPU_DECODE_AUTO
 
         return config
 

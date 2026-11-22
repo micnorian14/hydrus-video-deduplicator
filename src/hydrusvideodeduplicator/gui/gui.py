@@ -71,7 +71,7 @@ class DedupeParameters:
     debug: bool
     similarity_threshold: float
     skip_hashing: bool
-    gpu_decode: bool = False
+    gpu_decode: bool | str = False
 
 
 @dataclass
@@ -1051,7 +1051,7 @@ If you change this value you should clear the search cache. This isn't cleared a
             debug=False,  # TODO: Expose to GUI?
             similarity_threshold=similarity_threshold,
             skip_hashing=False,
-            gpu_decode=bool(self.config.gpu_decode),
+            gpu_decode="auto" if self.config.gpu_decode_auto else bool(self.config.gpu_decode),
         )
 
 
