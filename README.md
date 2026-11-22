@@ -121,12 +121,14 @@ Hydrus is, so your numbers will vary.
 | Step | Original 0.12.1 | This fork |
 |---|---|---|
 | Startup check for already-hashed files | several minutes on a large database | near-instant |
-| Perceptually hashing videos (`--gpu-decode`, HEVC samples, RTX 5070 Ti) | CPU decode | about 2× faster |
+| Perceptually hashing videos (`--gpu-decode`, RTX 5070 Ti) | CPU decode | up to about 2× faster on HEVC and 4K; little or no gain on H.264 at 1080p and below |
 | Building search tree | 3.3–4.8 s per file | about 0.28 s per file (12–17× faster) |
 | Finding potential duplicates, tool's own search (3,000-file test copy) | 36 min 9 s | 3 min 41 s, about 10× faster |
 | Finding potential duplicates, live run (same query) | 7.66 s per file | 3.82 files per second, about 29× faster |
 
-GPU decode on an RTX 5070 Ti was about twice as fast as CPU on HEVC samples. Downloading the next file while the current one hashes,
+How much `--gpu-decode` helps depends on your CPU and your files. On a 12-thread CPU with real files, HEVC and 4K videos hashed about 1.4× faster, and H.264 at 1080p and below was about the same speed. With the CPU limited to 4 cores, the same files were 2–4× faster. VP8, VP9 and MPEG-4 can be slower on the GPU.
+
+Downloading the next file while the current one hashes,
 and overlapping the Hydrus calls with the search, save more time on top of that.
 
 These are on by default. You can disable them if you want to compare against the original
@@ -218,6 +220,7 @@ python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --gpu-decode
   found a CUDA device.
 - AMD and Intel GPUs are not used; leave the flag off on those systems.
 - Only the hashing step uses it. It doesn't speed up "Finding potential duplicates".
+- It helps most with HEVC or 4K videos, or on a slower CPU. If your library is mostly H.264 at 1080p or below and your CPU is fast, you may not see a difference.
 - You can also set the environment variable `GPU_DECODE=1`. The GUI ignores command line flags, so use
   `GPU_DECODE=1` there.
 
