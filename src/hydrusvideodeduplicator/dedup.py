@@ -128,8 +128,9 @@ SKIP_REPEAT_PAIRS_INFO = "Skipping repeat pair sends."
 # --clear-search-cache is magenta; the rest is plain.
 # One paragraph so it wraps to the console width (fewer lines on a typical 1080p window).
 SEARCH_CACHE_WARNING = (
-    'WARNING: If you clear or resync potential duplicates in Hydrus ("delete all potential duplicate pairs and re-search" '
-    "or \"resync potential duplicate pairs to storage\"), you will have to clear this tool's search cache "
+    "WARNING: If you clear or resync potential duplicates in Hydrus "
+    '("delete all potential duplicate pairs and re-search" '
+    'or "resync potential duplicate pairs to storage"), you will have to clear this tool\'s search cache '
     "(--clear-search-cache) and re-search every video from zero. A large library can take several hours or days."
 )
 
@@ -139,7 +140,10 @@ GPU_DECODE_NO_DEVICE = "WARNING: --gpu-decode: no CUDA device found, decoding on
 
 
 def print_gpu_decode_status() -> None:
-    """Display-only: say once whether --gpu-decode found a CUDA device, with a blank line after. Decoding itself is unchanged."""
+    """Display-only: say once whether --gpu-decode found a CUDA device, with a blank line after.
+
+    Decoding itself is unchanged.
+    """
     try:
         from .vpdqpy.vpdqpy import Vpdq
 

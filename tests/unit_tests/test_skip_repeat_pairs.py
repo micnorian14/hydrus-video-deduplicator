@@ -277,9 +277,11 @@ class TestSkipRepeatPairs(unittest.TestCase):
         self.assertEqual(
             dedup.SEARCH_CACHE_WARNING,
             (
-                'WARNING: If you clear or resync potential duplicates in Hydrus ("delete all potential duplicate pairs and re-search" '
-                "or \"resync potential duplicate pairs to storage\"), you will have to clear this tool's search cache "
-                "(--clear-search-cache) and re-search every video from zero. A large library can take several hours or days."
+                "WARNING: If you clear or resync potential duplicates in Hydrus "
+                '("delete all potential duplicate pairs and re-search" '
+                'or "resync potential duplicate pairs to storage"), you will have to clear this tool\'s search cache '
+                "(--clear-search-cache) and re-search every video from zero. "
+                "A large library can take several hours or days."
             ),
         )
         self.assertEqual(

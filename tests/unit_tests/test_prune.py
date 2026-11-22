@@ -263,7 +263,6 @@ class TestBackup(unittest.TestCase):
             copy.close()
             self.assertIsNone(DedupeDB.backup_db(folder / "missing.sqlite"))
 
-
     def test_run_backup_shows_deleted_backups(self):
         with TemporaryDirectory() as tmpdir:
             _new_db(tmpdir, "videohashes.sqlite", _make_hashes(seed=2)).close()

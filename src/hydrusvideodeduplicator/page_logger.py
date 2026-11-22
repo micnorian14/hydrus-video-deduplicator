@@ -80,6 +80,4 @@ class HydrusPageLogger:
             self.client.client.add_files_to_page(page_key=page_key, hashes=[video_hash])
             self.sent += 1
         except Exception as exc:
-            self._log.debug(
-                f"Could not add file {video_hash} to Hydrus page '{self.page_name}': {exc}"
-            )
+            self._log.debug(f"Could not add file {video_hash} to Hydrus page '{self.page_name}': {exc}")
