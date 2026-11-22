@@ -85,13 +85,13 @@ Hydrus is, so your numbers will vary.
 
 | Step | Original 0.12.1 | This fork |
 |---|---|---|
-| Perceptually hashing videos (`--gpu-decode`, HEVC samples) | CPU decode | about 2× faster |
-| Startup check for already-hashed files | several minutes | near-instant |
+| Startup check for already-hashed files | several minutes on a large database | near-instant |
+| Perceptually hashing videos (`--gpu-decode`, HEVC samples, RTX 5070 Ti) | CPU decode | about 2× faster |
 | Building search tree | 3.3–4.8 s per file | about 0.28 s per file (12–17× faster) |
 | Finding potential duplicates, tool's own search (3,000-file test copy) | 36 min 9 s | 3 min 41 s, about 10× faster |
-| Finding potential duplicates, live run (same query) | 7.66 s per file | 3.82 files per second |
+| Finding potential duplicates, live run (same query) | 7.66 s per file | 3.82 files per second, about 29× faster |
 
-GPU decode was about twice as fast as CPU on HEVC samples. Downloading the next file while the current one hashes,
+GPU decode on an RTX 5070 Ti was about twice as fast as CPU on HEVC samples. Downloading the next file while the current one hashes,
 and overlapping the Hydrus calls with the search, save more time on top of that.
 
 These are on by default. You can disable them if you want to compare against the original
