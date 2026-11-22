@@ -16,7 +16,7 @@ This is a fork of [Hydrus Video Deduplicator](https://github.com/hydrusvideodedu
 It also adds `--relink-search-tree` to repair a damaged search tree, as reported in [issue #80](https://github.com/hydrusvideodeduplicator/hydrus-video-deduplicator/issues/80).
 
 This fork was vibe-coded with AI assistance and tested on a Hydrus library of about 3.5M files, with about 410k
-videos perceptually hashed. As in the original, videos include animated GIFs and APNGs.
+videos perceptually hashed.
 
 Please report problems with this fork on [this fork's issues page](https://github.com/micnorian14/hydrus-video-deduplicator/issues), not on the original project.
 
@@ -25,7 +25,7 @@ The original README follows further down, from [Hydrus Video Deduplicator](#hydr
 ## Built for backwards compatibility
 
 Every change in this fork, including the new flags, is backwards compatible with the original program. Your
-database, including its search tree, is generated and saved exactly as before. The fork only adds speed improvements
+database, including its search tree, is generated and saved exactly as before. This fork only aims to add optimizations, speed improvements
 and a few quality-of-life features. Some more aggressive optimizations were possible, but they were deliberately left
 out because they risked compatibility with existing databases.
 
