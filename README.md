@@ -246,7 +246,12 @@ python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --gpu-decode auto
   flags, so use the environment variable there.
 - With more than one NVIDIA GPU, the first one is used. Set `GPU_DECODE_DEVICE=1` to use the second one (0 is the
   first), or choose which GPUs the program can see with `CUDA_VISIBLE_DEVICES`.
-- Coming soon: auto mode will learn how fast your own CPU and GPU handle each kind of video and split the work to match. Right now it uses fixed rules based on common hardware.
+- Auto mode learns your computer's speeds as it goes. Once it has timed at least 5 videos of the same kind (same
+  codec and resolution) on both the GPU and the CPU, it sends that kind to whichever was faster, and lets the CPU
+  help with GPU videos that hash about as fast there. Until then it uses the rules above. It saves what it learned
+  in `gpu_profile.json` next to the dedupe database, so the next run picks up where this one left off. If your CPU,
+  GPU or NVIDIA driver changes, it starts learning again.
+- To make it start over, add `--reset-gpu-profile` to one run, or delete `gpu_profile.json`.
 
 ### `--skip-repeat-pairs`
 

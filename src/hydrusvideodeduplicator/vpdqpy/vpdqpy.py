@@ -126,6 +126,29 @@ class Vpdq:
             return None
 
     @staticmethod
+    def probe_video_details(video_bytes: bytes) -> tuple[str, int, int, float | None] | None:
+        """probe_video_stream() plus the duration in seconds (None if the header doesn't say). Nothing is decoded."""
+        try:
+            with av.open(io.BytesIO(video_bytes)) as container:
+                if not container.streams.video:
+                    return None
+                stream = container.streams.video[0]
+                codec_context = stream.codec_context
+                duration = None
+                if container.duration:
+                    duration = container.duration / av.time_base
+                elif stream.duration and stream.time_base:
+                    duration = float(stream.duration * stream.time_base)
+                return (
+                    codec_context.name or "",
+                    int(codec_context.width or 0),
+                    int(codec_context.height or 0),
+                    duration if duration and duration > 0 else None,
+                )
+        except Exception:
+            return None
+
+    @staticmethod
     def frame_extract_pyav(video_bytes: bytes, gpu_decode: bool = False) -> Iterator[av.VideoFrame]:
         """Extract frames from video
 

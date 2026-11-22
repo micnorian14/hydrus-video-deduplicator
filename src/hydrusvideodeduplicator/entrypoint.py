@@ -125,6 +125,10 @@ def main(
     ] = config.gpu_decode,
     # Set by '--gpu-decode auto' (see normalize_gpu_decode_args) or GPU_DECODE=auto.
     gpu_decode_auto: Annotated[Optional[bool], typer.Option(hidden=True)] = config.gpu_decode_auto,
+    reset_gpu_profile: Annotated[
+        Optional[bool],
+        typer.Option(help="Make '--gpu-decode auto' forget the CPU and GPU speeds it learned and start over."),
+    ] = False,
     skip_repeat_pairs: Annotated[
         Optional[bool],
         typer.Option(help="Send each pair to Hydrus once per run instead of twice (faster)."),
@@ -343,6 +347,7 @@ def main(
         custom_query=query,
         gpu_decode=resolve_gpu_decode(gpu_decode, gpu_decode_auto),
         skip_repeat_pairs=bool(skip_repeat_pairs),
+        reset_gpu_profile=bool(reset_gpu_profile),
     )
 
     if debug:

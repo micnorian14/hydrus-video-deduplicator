@@ -54,6 +54,11 @@ def video_prefers_gpu_decode(video: bytes) -> bool:
     return prefers_gpu_decode(*info)
 
 
+def probe_video_details(video: bytes) -> tuple[str, int, int, float | None] | None:
+    """(codec, width, height, duration in seconds or None) from a video file's header, or None if it can't be read."""
+    return Vpdq.probe_video_details(video)
+
+
 def last_decode_used_gpu() -> bool | None:
     """Whether the last compute_phash() on this thread really decoded on the GPU (None if unknown)."""
     return Vpdq.last_decode_used_gpu()
