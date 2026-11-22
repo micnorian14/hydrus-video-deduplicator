@@ -75,7 +75,9 @@ def backup_file_pattern(db_name: str | None = None) -> re.Pattern:
     return re.compile(re.escape(stem) + r"\.backup-\d{8}-\d{6}" + re.escape(ext) + "$")
 
 
-def backup_db(db_path: Path | None = None, keep: int = NUM_BACKUPS_TO_KEEP) -> Path | None:
+def backup_db(
+    db_path: Path | None = None, keep: int = NUM_BACKUPS_TO_KEEP, *, removed: list | None = None
+) -> Path | None:
     """
     Copy the database next to itself as <name>.backup-YYYYMMDD-HHMMSS.sqlite (--backup).
 
@@ -83,6 +85,7 @@ def backup_db(db_path: Path | None = None, keep: int = NUM_BACKUPS_TO_KEEP) -> P
     written to a temporary name first and only renamed once complete, so a failed or interrupted backup never
     counts as a backup. Afterwards only the newest `keep` backups are kept; older ones matching the backup name
     pattern are deleted (no other file is touched). Returns the backup path, or None if there is no database yet.
+    If `removed` is a list, one (old backup path, OSError or None) tuple is appended per old backup it tried to delete.
     """
     db_path = Path(db_path) if db_path is not None else get_db_file_path()
     if not db_path.is_file():
@@ -118,8 +121,12 @@ def backup_db(db_path: Path | None = None, keep: int = NUM_BACKUPS_TO_KEEP) -> P
         try:
             os.remove(old)
             dedupedblog.info(f"Deleted old backup {old}")
+            if removed is not None:
+                removed.append((old, None))
         except OSError as exc:
             dedupedblog.warning(f"Could not delete old backup {old}: {exc}")
+            if removed is not None:
+                removed.append((old, exc))
     return backup_path
 
 
@@ -344,6 +351,123 @@ class DedupeDb:
             "skipped_missing_phash": broken_phash,
             "skipped_missing_file": broken_file,
         }
+
+    # Files whose perceptual hash row is missing (an old upgrade could delete hashes another row still used).
+    ORPHANED_FILES_QUERY = (
+        "SELECT DISTINCT hash_id FROM shape_perceptual_hash_map "
+        "WHERE phash_id NOT IN ( SELECT phash_id FROM shape_perceptual_hashes )"
+    )
+
+    def count_files(self) -> int:
+        return self.execute("SELECT COUNT(*) FROM files;").fetchone()[0]
+
+    def count_orphaned_files(self) -> int:
+        """Number of files whose perceptual hash is missing. Read only; one query (about 0.2 s on 400k files)."""
+        return self.execute(f"SELECT COUNT(*) FROM ( {self.ORPHANED_FILES_QUERY} );").fetchone()[0]
+
+    def check_search_tree(self) -> dict[str, int]:
+        """
+        Read-only check for search tree damage that --relink-search-tree repairs (issue #80). About 0.5 s on 400k.
+
+        Counts, for the tree the search walks (from the root it uses, `parent_id IS NULL`):
+          extra_roots     more than one root (only one is searched)
+          no_root         1 if the tree has nodes but no root
+          broken_links    inner/outer links to nodes that don't exist
+          shared          nodes linked from more than one parent (or from a loop)
+          unreachable     nodes the search can't reach from the root (detached branches, loops)
+          wrong_parent    nodes whose parent_id isn't the node that links to them
+          no_hash         tree nodes without a perceptual hash row
+          not_in_tree     perceptual hashes used by a file but missing from the tree, not counting files that are
+                          still waiting in the phashed file queue (normal until "Building search tree" finishes)
+        "problems" is their sum. Pending branch maintenance (shape_maintenance_branch_regen) is normal and ignored.
+        """
+        import numpy as np
+
+        rows = self.execute(
+            "SELECT phash_id, IFNULL( parent_id, -1 ), IFNULL( inner_id, -1 ), IFNULL( outer_id, -1 ) "
+            "FROM shape_vptree ORDER BY phash_id;"
+        ).fetchall()
+        tree = np.array(rows, dtype=np.int64).reshape(-1, 4)
+        del rows
+        ids, parents, inners, outers = tree[:, 0], tree[:, 1], tree[:, 2], tree[:, 3]
+        n = len(ids)
+        result = dict.fromkeys(("extra_roots", "no_root", "broken_links", "shared", "unreachable", "wrong_parent"), 0)
+        if n > 0:
+            # Every link (parent position -> child id), and whether the child exists.
+            link_from = np.concatenate([np.arange(n), np.arange(n)])
+            link_to = np.concatenate([inners, outers])
+            used = link_to >= 0
+            link_from, link_to = link_from[used], link_to[used]
+            child = np.minimum(np.searchsorted(ids, link_to), n - 1)
+            exists = ids[child] == link_to
+            result["broken_links"] = int(np.count_nonzero(~exists))
+            link_from, child = link_from[exists], child[exists]
+
+            incoming = np.bincount(child, minlength=n)
+            result["shared"] = int(np.maximum(incoming - 1, 0).sum())
+            result["wrong_parent"] = int(np.count_nonzero(ids[link_from] != parents[child]))
+
+            roots = self.execute("SELECT COUNT(*) FROM shape_vptree WHERE parent_id IS NULL;").fetchone()[0]
+            result["extra_roots"] = max(0, roots - 1)
+            root_row = self.execute("SELECT phash_id FROM shape_vptree WHERE parent_id IS NULL;").fetchone()
+            if root_row is None:
+                result["no_root"] = 1
+                result["unreachable"] = n
+            else:
+                # Follow one parent link per node up to the root (pointer jumping). Nodes that never reach the
+                # root are unreachable: detached branches or loops.
+                root = int(np.searchsorted(ids, root_row[0]))
+                up = np.arange(n)
+                up[child] = link_from
+                up[root] = root
+                for _ in range(64):  # 2**64 steps is far more than any tree depth
+                    next_up = up[up]
+                    if np.array_equal(next_up, up):
+                        break
+                    up = next_up
+                result["unreachable"] = int(np.count_nonzero(up != root))
+
+        result["no_hash"] = self.execute(
+            "SELECT COUNT(*) FROM shape_vptree WHERE phash_id NOT IN ( SELECT phash_id FROM shape_perceptual_hashes );"
+        ).fetchone()[0]
+        result["not_in_tree"] = self.execute(
+            "SELECT COUNT( DISTINCT phash_id ) FROM shape_perceptual_hash_map "
+            "JOIN shape_perceptual_hashes USING ( phash_id ) JOIN files USING ( hash_id ) "
+            "WHERE phash_id NOT IN ( SELECT phash_id FROM shape_vptree ) "
+            "AND file_hash NOT IN ( SELECT file_hash FROM phashed_file_queue );"
+        ).fetchone()[0]
+        result["problems"] = sum(result.values())
+        result["nodes"] = n
+        return result
+
+    def remove_orphaned_files(self) -> int:
+        """
+        Remove files whose perceptual hash is missing (--prune-orphans). Run it inside a transaction.
+
+        Deletes their broken map rows and search cache rows, and their files rows unless the file also has a valid
+        perceptual hash or is waiting in the phashed file queue. The next run then hashes them again like new files.
+        Perceptual hashes and the search tree are not touched. Returns the number of files removed.
+        """
+        hash_ids = [(hash_id,) for (hash_id,) in self.execute(f"{self.ORPHANED_FILES_QUERY};").fetchall()]
+        if not hash_ids:
+            return 0
+        self.cur.executemany(
+            "DELETE FROM shape_perceptual_hash_map WHERE hash_id = ? "
+            "AND phash_id NOT IN ( SELECT phash_id FROM shape_perceptual_hashes );",
+            hash_ids,
+        )
+        self.cur.executemany(
+            "DELETE FROM files WHERE hash_id = ? "
+            "AND hash_id NOT IN ( SELECT hash_id FROM shape_perceptual_hash_map ) "
+            "AND file_hash NOT IN ( SELECT file_hash FROM phashed_file_queue );",
+            hash_ids,
+        )
+        self.cur.executemany(
+            "DELETE FROM shape_search_cache WHERE hash_id = ? "
+            "AND hash_id NOT IN ( SELECT hash_id FROM shape_perceptual_hash_map );",
+            hash_ids,
+        )
+        return len(hash_ids)
 
     def prune_files_not_in(self, existing_file_hashes) -> PruneResult:
         """

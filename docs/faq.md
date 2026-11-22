@@ -35,6 +35,8 @@ program it will continue where you left off.
 
 You can backup your dedupe database by copying the database directory somewhere safe.
 
+This fork can also make a copy for you with [`--backup`](../README.md#--backup). `--prune-deleted-files`, `--prune-orphans` and `--relink-search-tree` turn that on automatically.
+
 See [Where are the video hashes stored?](#where-are-the-video-hashes-stored) location for the database directory.
 
 ---
@@ -150,6 +152,8 @@ Then, you should also reset your search cache with `--clear-search-cache` to sea
 ## My file failed to hash
 
 If you find a video that fails to perceptually hash, please create an issue on GitHub with some information about the video or message `@applenanner` on the [Hydrus Discord](https://discord.gg/wPHPCUZ).
+
+This fork sends failed files to a Hydrus page named `failed` if you have created that page before running the program. See [`--failed-page-name`](../README.md#--failed-page-name).
 
 ---
 

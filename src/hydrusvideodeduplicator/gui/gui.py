@@ -35,7 +35,13 @@ from hydrusvideodeduplicator.config import (
     Config,
 )
 from hydrusvideodeduplicator.dedup_util import TqdmLoggingHandler, display_path, print_and_log
-from hydrusvideodeduplicator.db_tools import backup_message, prune_message, run_backup, run_prune
+from hydrusvideodeduplicator.db_tools import (
+    backup_message,
+    check_database,
+    prune_message,
+    run_backup,
+    run_prune,
+)
 from hydrusvideodeduplicator.dedup import (
     HydrusVideoDeduplicator,
     print_search_cache_warning,
@@ -210,6 +216,7 @@ class Worker(QObject):
                     self.logger,
                     f"Database filesize: {db_stats.file_size} bytes.",
                 )
+                check_database(self.db, gui=True)
                 print_search_cache_warning()
             except Exception as exc:
                 print_and_log(self.logger, f"Database upgrade failed: {exc}")
@@ -450,9 +457,9 @@ class MainWindow(QWidget):
         self.hydrus_query_textbox.setToolTip("JSON array of search parameters for what videos to hash.")
         self.hydrus_query_textbox.setMaximumHeight(38)
 
-        self.failed_page_name_textbox = QLineEdit(placeholderText="OPTIONAL: Failed Page Name")
+        self.failed_page_name_textbox = QLineEdit(placeholderText="Failed Page Name (default: failed)")
         self.failed_page_name_textbox.setToolTip(
-            "Name of the Hydrus page that will be populated with files that fail to be perceptually hashed. You must manually create this in Hydrus."  # noqa: E501
+            "Name of the Hydrus page that will be populated with files that fail to be perceptually hashed. Defaults to 'failed'. You must create the page in Hydrus yourself."  # noqa: E501
         )
         self.failed_page_name_textbox.setMaximumHeight(38)
 
@@ -1035,7 +1042,7 @@ If you change this value you should clear the search cache. This isn't cleared a
 
         failed_page_name = self.failed_page_name_textbox.text()
         if len(failed_page_name) == 0:
-            failed_page_name = None
+            failed_page_name = "failed"
 
         return DedupeParameters(
             job_count=job_count,

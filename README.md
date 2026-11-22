@@ -10,10 +10,11 @@ This is a fork of [Hydrus Video Deduplicator](https://github.com/hydrusvideodedu
 
 - Every speed change gives identical hashes, search tree and potential duplicate pairs.
 - Everything that behaves differently (GPU decode, skipping repeat pair sends, search tree repair, backups, pruning
-  deleted files) is opt-in and off by default.
+  deleted files or broken entries) is opt-in and off by default, except that failed files are sent to a Hydrus page
+  named `failed` if that page exists.
 - The database format is unchanged, so a database used by this fork still works with the original program.
 
-It also adds `--relink-search-tree` to repair a damaged search tree, as reported in [issue #80](https://github.com/hydrusvideodeduplicator/hydrus-video-deduplicator/issues/80).
+It also adds `--relink-search-tree` to repair a damaged search tree, as reported in [issue #80](https://github.com/hydrusvideodeduplicator/hydrus-video-deduplicator/issues/80), and `--prune-orphans` to remove videos whose perceptual hash is missing.
 
 This fork was vibe-coded with AI assistance and tested on a Hydrus library of about 3.5M files, with about 410k
 videos perceptually hashed.
@@ -57,13 +58,13 @@ the next file while the current one is hashed, an exact in-memory distance index
 "Finding potential duplicates", faster search tree building, and Hydrus calls that run alongside the search. See
 [Speed optimizations](#speed-optimizations-this-fork).
 
-**Fixes.** `--relink-search-tree` repairs a damaged search tree in seconds ([issue #80](https://github.com/hydrusvideodeduplicator/hydrus-video-deduplicator/issues/80)). Error and
+**Fixes.** `--relink-search-tree` repairs a damaged search tree in seconds ([issue #80](https://github.com/hydrusvideodeduplicator/hydrus-video-deduplicator/issues/80)). `--prune-orphans` removes videos whose perceptual hash is missing so they can be hashed again. Each run also prints two quick read-only checks for those problems. Error and
 "broken branch" messages no longer break the progress bar. Full-width lines keep their line break in the Windows
 console.
 
 **Console output.** Colored `Tip:`, `WARNING:` and `ERROR` labels with plain text after them, progress bars capped
 at 110 columns with colored stats and a steadier speed/ETA, one green completion line per stage with correct
-plurals, speed tips at the start of the duplicate search, a warning at startup about clearing potential duplicates in
+plurals, speed tips at the start of the duplicate search, two read-only startup checks for broken database entries and search tree damage, a warning at startup about clearing potential duplicates in
 Hydrus, and a shorter `--help`. Printed paths show `%LOCALAPPDATA%`, `%USERPROFILE%` or `~` instead of your user
 folder, so screenshots don't show your user name.
 
@@ -119,11 +120,42 @@ The final phase of the tool is limited by Hydrus's database queues. The fewer jo
 The program prints these tips at the start of the step. It also prints this warning once at startup, after the
 database filesize line:
 
-> ⚠️ **WARNING**: If you clear or resync potential duplicates in Hydrus (**"delete all potential duplicate pairs and re-search"** or **"resync potential duplicate pairs to storage"**), you will have to clear this tool's search cache (`--clear-search-cache`) and re-search every video from zero, which can take DAYS on a large library.
+> ⚠️ **WARNING**: If you clear or resync potential duplicates in Hydrus (**"delete all potential duplicate pairs and re-search"** or **"resync potential duplicate pairs to storage"**), you will have to clear this tool's search cache (`--clear-search-cache`) and re-search every video from zero. A large library can take several hours or days.
+
+## Startup checks
+
+Every run prints two quick, read-only checks (about 0.7 seconds on 400k videos). They never change the database.
+
+If everything is fine:
+
+```
+Checked 407893 files: no broken entries.
+Search tree: 393057 perceptual hashes, no search tree issues found.
+```
+
+If videos are missing their perceptual hash:
+
+```
+WARNING: Checked 407984 files: 91 videos are missing their perceptual hash. Run once with --prune-orphans to remove them. Your database is backed up automatically.
+```
+
+If the search tree is damaged, the warning lists only the kinds of issues that were found, for example:
+
+```
+WARNING: Search tree: 393057 perceptual hashes, issues found:
+  - 193057 hashes unreachable by the search (cut-off branches or loops)
+  - 2 links point to nodes that don't exist
+  - 3 top nodes found (should be 1)
+  - 4 parent links don't match
+  - 12 hashes are missing from the tree
+Run once with --relink-search-tree to repair it. Your database is backed up automatically. The next duplicate search will start over.
+```
+
+The search tree check looks for the kind of damage from [issue #80](https://github.com/hydrusvideodeduplicator/hydrus-video-deduplicator/issues/80). It does not flag a half-built tree, files still waiting to be hashed, or the tree shape left by `--relink-search-tree`.
 
 ## New flags
 
-All new flags are off by default. Add them to the command you already use, for example
+The flags below are off by default, except that failed files go to a Hydrus page named `failed` if that page exists. Add the flags you want to the command you already use, for example
 `python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --skip-repeat-pairs --prune-deleted-files`.
 More on running the program is in [Usage](./docs/usage.md).
 
@@ -131,9 +163,11 @@ More on running the program is in [Usage](./docs/usage.md).
 |---|---|
 | [`--gpu-decode`](#--gpu-decode) | You have an NVIDIA GPU and want hashing to use it for video decoding. |
 | [`--skip-repeat-pairs`](#--skip-repeat-pairs) | You want fewer Hydrus API calls while finding potential duplicates. |
-| [`--relink-search-tree`](#--relink-search-tree) | Once, to repair a damaged search tree. |
+| [`--relink-search-tree`](#--relink-search-tree) | Once, if the program warns about search tree issues. |
 | [`--backup`](#--backup) | You want a copy of the dedupe database before each run changes it. |
 | [`--prune-deleted-files`](#--prune-deleted-files) | You delete videos in Hydrus and want them out of the dedupe database. |
+| [`--prune-orphans`](#--prune-orphans) | Once, if the program warns about broken entries. |
+| [`--failed-page-name`](#--failed-page-name) | Optional. Defaults to `failed`. Use it only if you want a different page name. |
 
 ### `--gpu-decode`
 
@@ -179,14 +213,14 @@ tree, which takes seconds and re-hashes nothing. Then it clears the search cache
 every file again. That search can take a long time on a big database, and can be stopped and resumed.
 
 ```sh
-python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --relink-search-tree --backup
+python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --relink-search-tree
 ```
 
-- Add `--backup` (as above) so you have a copy from before the repair.
+- It always makes a backup first (it turns on `--backup`, so you don't need both).
 - **Remove it from your script after the first run.** Each run with this flag resets the search cache again, so a
   restart would start the search from zero instead of resuming.
 - Can't be combined with `--clear-search-tree`.
-- Broken database rows are skipped and reported; nothing else is deleted.
+- Broken entries are skipped and reported; nothing is deleted. To remove them, use [`--prune-orphans`](#--prune-orphans).
 
 ### `--backup`
 
@@ -198,7 +232,8 @@ is consistent.
 python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --backup
 ```
 
-- The 3 newest backups are kept. Older files with that name pattern are deleted; no other files are touched.
+- The 3 newest backups are kept. Older files with that name pattern are deleted; no other files are touched. The program prints the backup path, and `Deleted the oldest backup:` with the path when an old backup is removed.
+- `--prune-deleted-files`, `--prune-orphans` and `--relink-search-tree` turn on `--backup`, so you don't need both.
 - Each backup is the full size of the database, so 3 backups take about 3 times its size.
 - Nothing happens if there is no database yet.
 - To restore, close the program and copy a backup over `videohashes.sqlite`.
@@ -229,6 +264,28 @@ python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --prune-deleted-files
 - The database file doesn't get smaller until you run **Run Database Maintenance** in the GUI.
 - The database format does not change, so the pruned database still works with the original program.
 - It runs at startup, before perceptual hashing. In the GUI this is the **Prune Deleted Files** button.
+
+### `--prune-orphans`
+
+Removes broken entries: videos in the dedupe database whose perceptual hash is missing. The search skips them, so nothing breaks, but they are never compared. After removal, the next run hashes them again like new videos. Run it once if the program starts with `WARNING: Checked N files: N videos are missing their perceptual hash...`.
+
+```sh
+python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --prune-orphans
+```
+
+- It always makes a backup first (it turns on `--backup`, so you don't need both).
+- Only the broken entries are removed. The search tree and every other video's search progress are not touched.
+- All or nothing: if it fails or you press CTRL+C, nothing is removed.
+- The database format does not change, so it still works with the original program.
+- You can combine it with other flags. It runs first, before `--prune-deleted-files` and `--relink-search-tree`.
+
+### `--failed-page-name`
+
+Failed files are sent to a Hydrus page named `failed` by default. Create a page with that name in Hydrus before you run the program if you want to see them there. You do not have to pass the flag.
+
+- If the page exists, failed files are added to it, and the program prints e.g. `Sent 1 failed file to the Hydrus page 'failed'.`
+- If the page does not exist, the run continues as usual. Only if files failed to hash, it prints: `Tip: Create a Hydrus page with the name 'failed' before running the program to see any files that failed to hash.`
+- `--failed-page-name` is still accepted. Use `--failed-page-name=yourname` (or the Failed Page Name box in the GUI, or `FAILED_PAGE_NAME`) to use a different page. The page is looked up once per run, so a missing page does not slow hashing or print errors.
 
 ---
 

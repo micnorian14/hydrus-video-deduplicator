@@ -20,7 +20,7 @@ from hydrusvideodeduplicator.client import (
 )
 from hydrusvideodeduplicator.config import Config
 from hydrusvideodeduplicator.db import DedupeDB
-from hydrusvideodeduplicator.db_tools import run_backup, run_prune
+from hydrusvideodeduplicator.db_tools import check_database, run_backup, run_prune, run_prune_orphans
 from hydrusvideodeduplicator.dedup import HydrusVideoDeduplicator, print_search_cache_warning
 from hydrusvideodeduplicator.dedup_util import TqdmLoggingHandler, display_path, print_and_log
 from dotenv import find_dotenv, load_dotenv
@@ -76,7 +76,7 @@ def main(
     ] = False,
     relink_search_tree: Annotated[
         Optional[bool],
-        typer.Option(help="Repair a damaged search tree (one-time; see README). Back up your database first."),
+        typer.Option(help="Repair a damaged search tree (one-time; see README). Turns on --backup."),
     ] = False,
     clear_search_cache: Annotated[
         Optional[bool],
@@ -96,8 +96,15 @@ def main(
             help="Remove videos that are no longer in Hydrus from the dedupe database and search tree. Turns on --backup."  # noqa: E501
         ),
     ] = False,
+    prune_orphans: Annotated[
+        Optional[bool],
+        typer.Option(
+            help="Remove broken entries (videos whose perceptual hash is missing) so they are re-hashed. Turns on --backup."  # noqa: E501
+        ),
+    ] = False,
     failed_page_name: Annotated[
-        Optional[str], typer.Option(help="The name of the Hydrus page to add failed files to.")
+        Optional[str],
+        typer.Option(help="The name of the Hydrus page to add failed files to. Defaults to 'failed'."),
     ] = config.failed_page_name,
     job_count: Annotated[
         Optional[int],
@@ -206,8 +213,8 @@ def main(
 
     # Deduplication
 
-    if prune_deleted_files:
-        backup = True  # pruning always backs up first
+    if prune_deleted_files or prune_orphans or relink_search_tree:
+        backup = True  # pruning and relinking always back up first
 
     if DedupeDB.does_db_exist():
         print_and_log(logger, f"Found existing database at: '{display_path(DedupeDB.get_db_file_path())}'")
@@ -253,7 +260,13 @@ def main(
             logger,
             f"Database filesize: {db_stats.file_size} bytes.",
         )
+        # Read only. Each check is skipped when the flag that fixes it is given.
+        check_database(db, check_orphans=not prune_orphans, check_tree=not (relink_search_tree or clear_search_tree))
         print_search_cache_warning()
+
+        if prune_orphans:
+            # First, so the steps below only see valid rows.
+            run_prune_orphans(db)
 
         if prune_deleted_files:
             run_prune(db, hvdclient)

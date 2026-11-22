@@ -6,7 +6,6 @@ if TYPE_CHECKING:
     from typing import Any
 
 from .client import HVDClient
-from .dedup_util import print_and_log
 
 import logging
 
@@ -33,38 +32,54 @@ def find_page_key_from_name(page: dict[str, Any], page_name: str) -> str | None:
     return None
 
 
+DEFAULT_FAILED_PAGE_NAME = "failed"
+
+
+def resolve_failed_page_name(name: str | None) -> str:
+    """'failed' unless a custom --failed-page-name (or equivalent) was given."""
+    if name is None or not str(name).strip():
+        return DEFAULT_FAILED_PAGE_NAME
+    return str(name).strip()
+
+
 class HydrusPageLogger:
-    """Class to add files to pages in Hydrus."""
+    """Add failed files to a Hydrus page, if one with this name exists."""
 
     _log = logging.getLogger("HydrusPageLogger")
     _log.setLevel(logging.INFO)
 
     def __init__(self, client: HVDClient, page_name: str):
-        """Page name must exist in Hydrus or an error will occur."""
         self.client = client
         self.page_name = page_name
+        self.sent = 0
+        self.page_missing = False
+        self._page_key: str | None = None
+        self._resolved = False
+
+    def _page_key_or_none(self) -> str | None:
+        """Look up the page once. A missing page or lookup error is silent and is not retried."""
+        if self._resolved:
+            return self._page_key
+        self._resolved = True
+        try:
+            self._page_key = get_page_key(self.client, self.page_name)
+        except Exception as exc:
+            self._log.debug(f"Could not look up Hydrus page '{self.page_name}': {exc}")
+            return None
+        if self._page_key is None:
+            self.page_missing = True
+            self._log.debug(f"No Hydrus page named '{self.page_name}'")
+        return self._page_key
 
     def add_failed_video(self, video_hash: str) -> None:
-        """Try to add a failed video to the Hydrus page."""
-        try:
-            page_key = get_page_key(self.client, self.page_name)
-            if page_key is None:
-                raise Exception("page_key is None.")
-        except Exception as e:
-            print_and_log(self._log, str(e), logging.ERROR)
-            print_and_log(self._log, f"Error when trying to get page key for page name {self.page_name}", logging.ERROR)
-            return None
-
+        """Add a failed video to the Hydrus page. Does nothing if the page is missing."""
+        page_key = self._page_key_or_none()
+        if page_key is None:
+            return
         try:
             self.client.client.add_files_to_page(page_key=page_key, hashes=[video_hash])
-        except Exception as e:
-            print_and_log(self._log, str(e), logging.ERROR)
-            print_and_log(
-                self._log,
-                f"""Error when trying to add file: '{video_hash}' \
-                \nto client page: '{self.page_name}' \
-                \nwith page_key: '{page_key}' \
-                \nEnsure there is a page in Hydrus named '{self.page_name}' \
-                """,
-                logging.ERROR,
+            self.sent += 1
+        except Exception as exc:
+            self._log.debug(
+                f"Could not add file {video_hash} to Hydrus page '{self.page_name}': {exc}"
             )

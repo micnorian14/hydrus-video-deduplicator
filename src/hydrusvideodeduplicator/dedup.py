@@ -28,7 +28,7 @@ from .client import HVDClient
 from .db import DedupeDB, vptree
 from .dedup_util import console_print, print_success, print_user, style_user_text
 from .hashing import compute_phash
-from .page_logger import HydrusPageLogger
+from .page_logger import HydrusPageLogger, resolve_failed_page_name
 from hvdaccelerators import vpdq
 
 
@@ -126,13 +126,11 @@ SKIP_REPEAT_PAIRS_INFO = "Skipping repeat pair sends."
 # Printed once at startup after the database filesize (or "creating a database") lines,
 # for everyone (display only). Only the word "WARNING:" is red3 (not bold);
 # --clear-search-cache is magenta; the rest is plain.
-# Lines are kept under 80 characters so they don't get re-wrapped on a standard console.
+# One paragraph so it wraps to the console width (fewer lines on a typical 1080p window).
 SEARCH_CACHE_WARNING = (
-    'WARNING: If you clear or resync potential duplicates in Hydrus ("delete all\n'
-    'potential duplicate pairs and re-search" or "resync potential duplicate pairs\n'
-    "to storage\"), you will have to clear this tool's search cache\n"
-    "(--clear-search-cache) and re-search every video from zero, which can take\n"
-    "DAYS on a large library."
+    'WARNING: If you clear or resync potential duplicates in Hydrus ("delete all potential duplicate pairs and re-search" '
+    "or \"resync potential duplicate pairs to storage\"), you will have to clear this tool's search cache "
+    "(--clear-search-cache) and re-search every video from zero. A large library can take several hours or days."
 )
 
 
@@ -141,7 +139,7 @@ GPU_DECODE_NO_DEVICE = "WARNING: --gpu-decode: no CUDA device found, decoding on
 
 
 def print_gpu_decode_status() -> None:
-    """Display-only: say once whether --gpu-decode found a CUDA device. Decoding itself is unchanged."""
+    """Display-only: say once whether --gpu-decode found a CUDA device, with a blank line after. Decoding itself is unchanged."""
     try:
         from .vpdqpy.vpdqpy import Vpdq
 
@@ -152,6 +150,7 @@ def print_gpu_decode_status() -> None:
         print(f"[blue]{GPU_DECODE_ON}")
     else:
         console_print(style_user_text(GPU_DECODE_NO_DEVICE), highlight=False)
+    print()
 
 
 def print_search_cache_warning() -> None:
@@ -174,6 +173,17 @@ SPEED_TIPS = (
 
 def _plural(n: int, singular: str, plural: str | None = None) -> str:
     return singular if n == 1 else (plural or f"{singular}s")
+
+
+def failed_page_sent_message(count: int, page_name: str) -> str:
+    return f"Sent {count} failed {_plural(count, 'file')} to the Hydrus page '{page_name}'."
+
+
+def failed_page_missing_tip(page_name: str) -> str:
+    return (
+        f"Tip: Create a Hydrus page with the name '{page_name}' before running the program "
+        "to see any files that failed to hash."
+    )
 
 
 def found_videos_to_hash_message(n: int) -> str:
@@ -409,7 +419,7 @@ class HydrusVideoDeduplicator:
         self.client = client
         self.similarity_threshold = similarity_threshold
         self.job_count = job_count
-        self.page_logger = None if failed_page_name is None else HydrusPageLogger(self.client, failed_page_name)
+        self.page_logger = HydrusPageLogger(self.client, resolve_failed_page_name(failed_page_name))
         self.search_tags = self.get_search_tags(custom_query)
         self.update_progress_callback = update_progress_callback
         if self.update_progress_callback:
@@ -430,6 +440,7 @@ class HydrusVideoDeduplicator:
             if len(custom_query) > 0:
                 search_tags.extend(custom_query)
                 print(f"[blue]Custom Query: {custom_query}")
+                print()
         return search_tags
 
     def deduplicate(
@@ -487,11 +498,13 @@ class HydrusVideoDeduplicator:
                             print(
                                 f"[yellow]{stats.failed_from_phash_count} failures were from an error during perceptual hashing. Are the files corrupted?"  # noqa: E501
                             )
-                            print_user(
-                                "\nTip: You could have seen which files failed directly in Hydrus by "
-                                "creating a Hydrus page with the name 'failed' and "
-                                "running the program with '--failed-page-name=failed'\n"
-                            )
+                            if self.page_logger.sent > 0:
+                                print()
+                                print_success(
+                                    failed_page_sent_message(self.page_logger.sent, self.page_logger.page_name)
+                                )
+                            elif self.page_logger.page_missing:
+                                print_user(f"\n{failed_page_missing_tip(self.page_logger.page_name)}")
                     if not hashing_finished:
                         print_success(added_hashes_message(stats.success_hash_count))
 

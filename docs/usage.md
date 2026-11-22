@@ -81,21 +81,23 @@ python -m hydrusvideodeduplicator --api-key="..." --query="character:batman"
 See [Speed optimizations (this fork)](../README.md#speed-optimizations-this-fork) in the README for every speed
 switch and its default, the speed tips for "Finding potential duplicates", and the warning about clearing or
 resyncing potential duplicates in Hydrus. See [New flags](../README.md#new-flags) for how each new flag works,
-including `--skip-repeat-pairs`, `--gpu-decode` and `--relink-search-tree`.
+including `--skip-repeat-pairs`, `--gpu-decode`, `--relink-search-tree` and `--prune-orphans`.
 
-### `--backup` and `--prune-deleted-files`
+### `--backup`, `--prune-deleted-files` and `--prune-orphans`
 
-Both are off by default.
+These flags are off by default. `--prune-deleted-files`, `--prune-orphans` and `--relink-search-tree` make a backup first.
 
 - `--backup` copies the dedupe database next to itself before the run changes it, and keeps the 3 newest backups.
-- `--prune-deleted-files` removes videos you have deleted in Hydrus from the dedupe database and search tree. It
-  makes a backup first.
+- `--prune-deleted-files` removes videos you have deleted in Hydrus from the dedupe database and search tree.
+- `--prune-orphans` removes videos whose perceptual hash is missing, so the next run hashes them again.
+
+Failed files are sent to a Hydrus page named `failed` if you have created that page. See [`--failed-page-name`](../README.md#--failed-page-name). Every run also prints two read-only [startup checks](../README.md#startup-checks).
 
 ```sh
 python -m hydrusvideodeduplicator --api-key="..." --prune-deleted-files
 ```
 
-See [`--backup`](../README.md#--backup) and [`--prune-deleted-files`](../README.md#--prune-deleted-files) in the
+See [`--backup`](../README.md#--backup), [`--prune-deleted-files`](../README.md#--prune-deleted-files) and [`--prune-orphans`](../README.md#--prune-orphans) in the
 README for details.
 
-> ⚠️ **WARNING**: If you clear or resync potential duplicates in Hydrus (**"delete all potential duplicate pairs and re-search"** or **"resync potential duplicate pairs to storage"**), you will have to clear this tool's search cache (`--clear-search-cache`) and re-search every video from zero, which can take DAYS on a large library.
+> ⚠️ **WARNING**: If you clear or resync potential duplicates in Hydrus (**"delete all potential duplicate pairs and re-search"** or **"resync potential duplicate pairs to storage"**), you will have to clear this tool's search cache (`--clear-search-cache`) and re-search every video from zero. A large library can take several hours or days.

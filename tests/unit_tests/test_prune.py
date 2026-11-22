@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
 import random
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 from hydrusvideodeduplicator import db_tools
 from hydrusvideodeduplicator.db import DedupeDB, vptree
@@ -260,6 +262,51 @@ class TestBackup(unittest.TestCase):
             self.assertEqual(_tables(copy), tables)
             copy.close()
             self.assertIsNone(DedupeDB.backup_db(folder / "missing.sqlite"))
+
+
+    def test_run_backup_shows_deleted_backups(self):
+        with TemporaryDirectory() as tmpdir:
+            _new_db(tmpdir, "videohashes.sqlite", _make_hashes(seed=2)).close()
+            folder = Path(tmpdir)
+            old = [folder / f"videohashes.backup-2020010{i}-000000.sqlite" for i in range(1, 4)]
+            for f in old:
+                f.write_bytes(b"x")
+            removed = []
+            DedupeDB.backup_db(folder / "videohashes.sqlite", removed=removed)
+            self.assertEqual(removed, [(old[0], None)])
+
+            with mock.patch.object(db_tools, "print_user") as printed:
+                db_tools.run_backup(folder / "videohashes.sqlite")
+            printed.assert_called_once()
+            self.assertEqual(printed.call_args.args[0], db_tools.deleted_backup_message(old[1]))
+            shown = db_tools.display_path(old[1])
+            self.assertEqual(db_tools.deleted_backup_message(old[1]), f"Deleted the oldest backup: {shown}")
+
+    def test_run_backup_warns_when_delete_fails(self):
+        with TemporaryDirectory() as tmpdir:
+            _new_db(tmpdir, "videohashes.sqlite", _make_hashes(seed=2)).close()
+            folder = Path(tmpdir)
+            old = [folder / f"videohashes.backup-2020010{i}-000000.sqlite" for i in range(1, 4)]
+            for f in old:
+                f.write_bytes(b"x")
+            real_remove = os.remove
+
+            def remove(path):
+                if Path(path) == old[0]:
+                    raise PermissionError(13, "Access is denied", str(path))
+                real_remove(path)
+
+            with (
+                mock.patch.object(DedupeDB.os, "remove", side_effect=remove),
+                mock.patch.object(db_tools, "print_user") as printed,
+            ):
+                self.assertIsNotNone(db_tools.run_backup(folder / "videohashes.sqlite"))
+            printed.assert_called_once()
+            shown = db_tools.display_path(old[0])
+            expected = f"Could not delete the oldest backup: {shown}: Access is denied"
+            self.assertEqual(printed.call_args.args[0], expected)
+            self.assertEqual(printed.call_args.kwargs["default_style"], "yellow")
+            self.assertTrue(old[0].exists())
 
 
 if __name__ == "__main__":

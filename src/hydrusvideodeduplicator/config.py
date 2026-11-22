@@ -40,7 +40,7 @@ class Config:
         self.hydrus_api_key = None
         self.hydrus_api_url = None
         self.dedupe_database_dir = None
-        self.failed_page_name = None
+        self.failed_page_name = "failed"
         self.requests_ca_bundle = None
         self.hydrus_query = None
         self.hydrus_local_file_service_keys = None
@@ -76,7 +76,7 @@ class Config:
             config_map.get("DEDUP_DATABASE_DIR", PlatformDirs("hydrusvideodeduplicator").user_data_dir)
         )
 
-        config.failed_page_name = config_map.get("FAILED_PAGE_NAME", None)
+        config.failed_page_name = config_map.get("FAILED_PAGE_NAME", "failed")
 
         config.requests_ca_bundle = config_map.get("REQUESTS_CA_BUNDLE", None)
 

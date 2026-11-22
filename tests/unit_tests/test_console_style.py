@@ -64,10 +64,13 @@ class TestConsoleStyle(unittest.TestCase):
             print("Database filesize: 123 bytes.")
             dedup.print_search_cache_warning()
             print("Custom Query: ['tag']")
-        printed = out.getvalue()
+        printed = out.getvalue().replace("\r\n", "\n")
         self.assertIn("Database filesize: 123 bytes.\n\n", printed)
         self.assertIn("\n\nCustom Query: ['tag']\n", printed)
-        self.assertIn(dedup.SEARCH_CACHE_WARNING, printed.replace("\r\n", "\n"))
+        # The warning is one paragraph and wraps to the console width.
+        printed_flat = " ".join(printed.split())
+        warning_flat = " ".join(dedup.SEARCH_CACHE_WARNING.split())
+        self.assertIn(warning_flat, printed_flat)
         self.assertNotIn("\n\n\n", printed)
 
     def test_search_cache_warning_colors(self):
