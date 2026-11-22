@@ -129,14 +129,14 @@ Every run prints two quick, read-only checks (about 0.7 seconds on 400k videos).
 If everything is fine:
 
 ```
-Checked 407893 files: no broken entries.
+Checked 407893 videos: no broken entries.
 Search tree: 393057 perceptual hashes, no search tree issues found.
 ```
 
 If videos are missing their perceptual hash:
 
 ```
-WARNING: Checked 407984 files: 91 videos are missing their perceptual hash. Run once with --prune-orphans to remove them. Your database is backed up automatically.
+WARNING: Checked 407984 videos: 91 videos are missing their perceptual hash. Run once with --prune-orphans to remove them. Your database is backed up automatically.
 ```
 
 If the search tree is damaged, the warning lists only the kinds of issues that were found, for example:
@@ -267,7 +267,7 @@ python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --prune-deleted-files
 
 ### `--prune-orphans`
 
-Removes broken entries: videos in the dedupe database whose perceptual hash is missing. The search skips them, so nothing breaks, but they are never compared. After removal, the next run hashes them again like new videos. Run it once if the program starts with `WARNING: Checked N files: N videos are missing their perceptual hash...`.
+Removes broken entries: videos in the dedupe database whose perceptual hash is missing. The search skips them, so nothing breaks, but they are never compared. After removal, the next run hashes them again like new videos. Run it once if the program starts with `WARNING: Checked N videos: N videos are missing their perceptual hash...`.
 
 ```sh
 python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --prune-orphans

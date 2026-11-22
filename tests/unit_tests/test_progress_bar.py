@@ -28,7 +28,7 @@ class TestProgressBarWidth(unittest.TestCase):
             file=out,
             ncols=cols,
             desc="Finding potential duplicates",
-            unit="file",
+            unit="video",
             colour="GREEN",
             smoothing=dedup.TQDM_SMOOTHING,
         )
@@ -57,10 +57,10 @@ class TestProgressBarWidth(unittest.TestCase):
             dynamic_ncols=True,
             smoothing=dedup.TQDM_SMOOTHING,
             colour="GREEN",
-            unit="file",
+            unit="video",
             desc="x",
         )
-        self.assertEqual((bar.smoothing, bar.colour, bar.unit, bar.desc), (dedup.TQDM_SMOOTHING, "GREEN", "file", "x"))
+        self.assertEqual((bar.smoothing, bar.colour, bar.unit, bar.desc), (dedup.TQDM_SMOOTHING, "GREEN", "video", "x"))
         bar.close()
 
     _ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -116,7 +116,7 @@ class TestProgressBarWidth(unittest.TestCase):
             file=out,
             ncols=50,
             desc="Finding potential duplicates",
-            unit="file",
+            unit="video",
             mininterval=0,
             miniters=1,
             leave=True,
@@ -146,7 +146,7 @@ class TestProgressBarWidth(unittest.TestCase):
             file=out,
             ncols=110,
             desc="Finding potential duplicates",
-            unit="file",
+            unit="video",
             colour="GREEN",
             smoothing=0,
             mininterval=0,
@@ -173,7 +173,7 @@ class TestProgressBarWidth(unittest.TestCase):
             file=out,
             ncols=80,
             desc="Building search tree",
-            unit="file",
+            unit="video",
             colour="GREEN",
             smoothing=0,
             mininterval=0,
@@ -190,7 +190,7 @@ class TestProgressBarWidth(unittest.TestCase):
             file=wide,
             ncols=200,
             desc="Building search tree",
-            unit="file",
+            unit="video",
             colour="GREEN",
             smoothing=0,
             mininterval=0,
@@ -205,7 +205,7 @@ class TestProgressBarWidth(unittest.TestCase):
         plain = text
         for code in (dedup._BAR_CYAN, dedup._BAR_YELLOW, dedup._BAR_RESET, "\x1b[32m"):
             plain = plain.replace(code, "")
-        self.assertRegex(plain, r"Building search tree: 0 files \[00:00, \?file/s\]")
+        self.assertRegex(plain, r"Building search tree: 0 videos \[00:00, \?video/s\]")
 
 
 if __name__ == "__main__":

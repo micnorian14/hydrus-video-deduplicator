@@ -102,7 +102,7 @@ def run_prune(db: DedupeDB.DedupeDb, client: HVDClient) -> DedupeDB.PruneResult 
 
 
 def orphans_check_message(files: int, broken: int, gui: bool = False) -> str:
-    checked = f"Checked {files} {_plural(files, 'file')}"
+    checked = f"Checked {files} {_plural(files, 'video')}"
     if broken == 0:
         return f"{checked}: no broken entries."
     missing = "1 video is missing its" if broken == 1 else f"{broken} videos are missing their"

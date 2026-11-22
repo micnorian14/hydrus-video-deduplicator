@@ -272,7 +272,7 @@ class TestStartupLines(unittest.TestCase):
             db = _new_db(tmpdir, "lines.sqlite", _make_hashes(seed=12))
             files, nodes = db.count_files(), _one(db, "SELECT COUNT(*) FROM shape_vptree;")
             healthy = [
-                ("green", f"Checked {files} files: no broken entries."),
+                ("green", f"Checked {files} videos: no broken entries."),
                 ("green", f"Search tree: {nodes} perceptual hashes, no search tree issues found."),
             ]
             self.assertEqual(self._lines(db), healthy)
@@ -285,7 +285,7 @@ class TestStartupLines(unittest.TestCase):
             clean_tree = f"Search tree: {nodes} perceptual hashes, no search tree issues found."
             self.assertEqual(lines[0], ("green", clean_tree))
             self.assertEqual(lines[1], ("warning", db_tools.orphans_check_message(files, 3)))
-            self.assertTrue(lines[1][1].startswith(f"WARNING: Checked {files} files: 3 videos are missing their"))
+            self.assertTrue(lines[1][1].startswith(f"WARNING: Checked {files} videos: 3 videos are missing their"))
 
             _detach_branch(db)
             db.commit()
@@ -306,7 +306,7 @@ class TestStartupLines(unittest.TestCase):
             _detach_branch(db)
             db.commit()
             lines = self._lines(db)
-            self.assertEqual(lines[0], ("green", f"Checked {db.count_files()} files: no broken entries."))
+            self.assertEqual(lines[0], ("green", f"Checked {db.count_files()} videos: no broken entries."))
             self.assertEqual(lines[1][0], "warning")
             self.assertIn("Run once with --relink-search-tree to repair it", lines[1][1])
             db.close()

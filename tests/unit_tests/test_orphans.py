@@ -84,20 +84,20 @@ class TestOrphanedFiles(unittest.TestCase):
             db.close()
 
     def test_messages(self):
-        self.assertEqual(db_tools.orphans_check_message(407893, 0), "Checked 407893 files: no broken entries.")
+        self.assertEqual(db_tools.orphans_check_message(407893, 0), "Checked 407893 videos: no broken entries.")
         self.assertEqual(
             db_tools.orphans_check_message(407984, 91),
-            "WARNING: Checked 407984 files: 91 videos are missing their perceptual hash. "
+            "WARNING: Checked 407984 videos: 91 videos are missing their perceptual hash. "
             "Run once with --prune-orphans to remove them. Your database is backed up automatically.",
         )
         self.assertEqual(
             db_tools.orphans_check_message(407984, 1),
-            "WARNING: Checked 407984 files: 1 video is missing its perceptual hash. "
+            "WARNING: Checked 407984 videos: 1 video is missing its perceptual hash. "
             "Run once with --prune-orphans to remove it. Your database is backed up automatically.",
         )
         self.assertEqual(
             db_tools.orphans_check_message(2, 2, gui=True),
-            "WARNING: Checked 2 files: 2 videos are missing their perceptual hash. They are skipped, so nothing "
+            "WARNING: Checked 2 videos: 2 videos are missing their perceptual hash. They are skipped, so nothing "
             "breaks. To remove them, run the command line version once with --prune-orphans. "
             "Your database is backed up automatically.",
         )

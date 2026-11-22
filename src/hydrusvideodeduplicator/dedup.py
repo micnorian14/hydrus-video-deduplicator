@@ -63,7 +63,7 @@ _BAR_CYAN = "\x1b[1;36m"
 _BAR_YELLOW = "\x1b[93m"
 _BAR_RESET = "\x1b[0m"
 
-# Known total: "  8%|...| 62/219690 [00:06<5:56:35, 10.27file/s]"
+# Known total: "  8%|...| 62/219690 [00:06<5:56:35, 10.27video/s]"
 BAR_FORMAT = (
     "{desc}: "
     f"{_BAR_CYAN}{{percentage:3.0f}}%{_BAR_RESET}"
@@ -73,11 +73,11 @@ BAR_FORMAT = (
     f"{_BAR_YELLOW}{{rate_fmt}}{_BAR_RESET}{{postfix}}]"
 )
 
-# Unknown or zero total: "Building search tree: 0 files [00:00, ?file/s]"
-# Space + plural "files" for the count only; the rate unit stays "file/s".
+# Unknown or zero total: "Building search tree: 0 videos [00:00, ?video/s]"
+# Space + plural "videos" for the count only; the rate unit stays "video/s".
 BAR_FORMAT_NO_TOTAL = (
     "{desc}: "
-    f"{_BAR_CYAN}{{n_fmt}}{_BAR_RESET} files "
+    f"{_BAR_CYAN}{{n_fmt}}{_BAR_RESET} videos "
     f"[{_BAR_YELLOW}{{elapsed}}{_BAR_RESET}, {_BAR_YELLOW}{{rate_fmt}}{_BAR_RESET}{{postfix}}]"
 )
 
@@ -702,7 +702,7 @@ class HydrusVideoDeduplicator:
             dynamic_ncols=True,
             total=len(files),
             desc="Finding potential duplicates",
-            unit="file",
+            unit="video",
             colour="GREEN",
         ) as pbar:
 
@@ -811,7 +811,7 @@ class HydrusVideoDeduplicator:
                 total=len(results),
                 desc="Building search tree",
                 dynamic_ncols=True,
-                unit="file",
+                unit="video",
                 colour="GREEN",
             ) as pbar,
         ):
@@ -936,7 +936,7 @@ class HydrusVideoDeduplicator:
             dynamic_ncols=True,
             total=len(files),
             desc="Finding potential duplicates",
-            unit="file",
+            unit="video",
             colour="GREEN",
         ) as pbar:
             processed_count = 0
