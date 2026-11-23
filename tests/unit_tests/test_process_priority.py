@@ -14,11 +14,13 @@ from hydrusvideodeduplicator import process_priority as pp
 class TestProcessPriority(unittest.TestCase):
     def setUp(self):
         pp._applied = False
+        pp._info_pending = False
         self._old_env = os.environ.get("HVD_NORMAL_PRIORITY")
         os.environ.pop("HVD_NORMAL_PRIORITY", None)
 
     def tearDown(self):
         pp._applied = False
+        pp._info_pending = False
         if self._old_env is None:
             os.environ.pop("HVD_NORMAL_PRIORITY", None)
         else:
@@ -30,6 +32,10 @@ class TestProcessPriority(unittest.TestCase):
                 lowered = pp.apply_process_priority()
         set_prio.assert_called_once_with()
         self.assertTrue(lowered)
+        # The line is printed later, next to the GPU decode line.
+        self.assertEqual(out.getvalue(), "")
+        with redirect_stdout(io.StringIO()) as out:
+            self.assertTrue(pp.print_priority_info())
         self.assertIn(pp.BELOW_NORMAL_PRIORITY_INFO, out.getvalue())
 
     def test_flag_skips_lowering(self):
@@ -82,8 +88,17 @@ class TestProcessPriority(unittest.TestCase):
             with redirect_stdout(io.StringIO()) as out:
                 self.assertTrue(pp.apply_process_priority())
                 self.assertFalse(pp.apply_process_priority())
+                self.assertTrue(pp.print_priority_info())
+                self.assertFalse(pp.print_priority_info())
         set_prio.assert_called_once_with()
         self.assertEqual(out.getvalue().count(pp.BELOW_NORMAL_PRIORITY_INFO), 1)
+
+    def test_no_info_line_when_priority_not_lowered(self):
+        with mock.patch.object(pp, "_set_below_normal_priority"):
+            pp.apply_process_priority(normal_priority=True)
+        with redirect_stdout(io.StringIO()) as out:
+            self.assertFalse(pp.print_priority_info())
+        self.assertEqual(out.getvalue(), "")
 
     def test_windows_sets_below_normal_priority_class(self):
         with mock.patch.object(pp.sys, "platform", "win32"):

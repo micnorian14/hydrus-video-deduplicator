@@ -15,6 +15,7 @@ BELOW_NORMAL_PRIORITY_CLASS = 0x4000
 
 _log = logging.getLogger(__name__)
 _applied = False
+_info_pending = False
 
 
 def normal_priority_requested(normal_priority: bool = False) -> bool:
@@ -51,7 +52,7 @@ def apply_process_priority(*, normal_priority: bool = False) -> bool:
     Returns True if priority was lowered. Failures are logged at debug and ignored.
     Child threads and subprocesses inherit the process priority.
     """
-    global _applied
+    global _applied, _info_pending
     if _applied:
         return False
     if normal_priority_requested(normal_priority):
@@ -64,5 +65,15 @@ def apply_process_priority(*, normal_priority: bool = False) -> bool:
         _applied = True
         return False
     _applied = True
+    _info_pending = True
+    return True
+
+
+def print_priority_info() -> bool:
+    """Print the below-normal priority line once, if priority was lowered. Returns True if printed."""
+    global _info_pending
+    if not _info_pending:
+        return False
+    _info_pending = False
     print(f"[blue]{BELOW_NORMAL_PRIORITY_INFO}")
     return True

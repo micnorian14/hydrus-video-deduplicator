@@ -36,6 +36,7 @@ from .hashing import compute_phash, last_decode_used_gpu, probe_video_details, v
 from . import gpu_profile
 from .gpu_profile import GpuProfile
 from .page_logger import HydrusPageLogger, resolve_failed_page_name
+from .process_priority import print_priority_info
 from hvdaccelerators import vpdq
 
 
@@ -182,6 +183,7 @@ def print_gpu_decode_status(auto: bool = False) -> str:
         console_print(style_user_text(GPU_DECODE_NO_NVDEC), highlight=False)
     else:
         console_print(style_user_text(GPU_DECODE_AUTO_NO_DEVICE if auto else GPU_DECODE_NO_DEVICE), highlight=False)
+    print_priority_info()
     print()
     return status
 
@@ -682,6 +684,8 @@ class HydrusVideoDeduplicator:
             self.gpu_decode_available = status == GPU_STATUS_ON
             if status == GPU_STATUS_NO_NVDEC and not self.gpu_decode_auto:
                 self.gpu_decode = False  # no video could be GPU decoded
+        elif print_priority_info():
+            print()
         # --gpu-decode auto with a CUDA device: what it learned about this computer's speeds (see gpu_profile.py).
         self.gpu_profile = None
         if reset_gpu_profile or (self.gpu_decode_auto and self.gpu_decode_available):
