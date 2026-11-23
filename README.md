@@ -38,8 +38,10 @@ To get a Hydrus API key, enable the Client API if it is not already on: in Hydru
 From the activated virtual environment, run:
 
 ```sh
-python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY"
+python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --gpu-decode auto
 ```
+
+GPU decoding is off unless you add `--gpu-decode auto`. Leave it out if you do not have an NVIDIA GPU.
 
 Or save this as a `.bat` file in the repo folder and double-click it:
 
