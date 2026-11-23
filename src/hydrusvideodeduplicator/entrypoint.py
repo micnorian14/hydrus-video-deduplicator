@@ -126,14 +126,16 @@ def main(
         Optional[bool],
         typer.Option(
             help="Decode videos on an NVIDIA GPU (CUDA). Falls back to CPU if a video can't be GPU decoded. "
-            "'--gpu-decode auto' uses the GPU and the CPU together, each video on whichever is usually faster for it."
+            "'--gpu-decode auto' uses the GPU and the CPU together and learns which is faster for each kind of video."
         ),
     ] = config.gpu_decode,
     # Set by '--gpu-decode auto' (see normalize_gpu_decode_args) or GPU_DECODE=auto.
     gpu_decode_auto: Annotated[Optional[bool], typer.Option(hidden=True)] = config.gpu_decode_auto,
     reset_gpu_profile: Annotated[
         Optional[bool],
-        typer.Option(help="Make '--gpu-decode auto' forget the CPU and GPU speeds it learned and start over."),
+        typer.Option(
+            help="Make '--gpu-decode auto' forget the CPU and GPU speeds it learned (gpu_profile.json) and start over."
+        ),
     ] = False,
     skip_repeat_pairs: Annotated[
         Optional[bool],
