@@ -9,7 +9,7 @@
 This is a fork of [Hydrus Video Deduplicator](https://github.com/hydrusvideodeduplicator/hydrus-video-deduplicator). It does the same job and gives the same results, faster.
 
 - Every speed change gives identical hashes, search tree and potential duplicate pairs.
-- New features are off unless you turn them on. The one exception: failed files go to a Hydrus page named `failed`, if you've made one.
+- New features are off unless you turn them on. The exceptions: failed files go to a Hydrus page named `failed`, if you've made one, and the tool runs at below-normal priority so your PC stays usable.
 - The database format is unchanged, so a database used by this fork still works with the original program.
 
 It also adds `--relink-search-tree` to repair a damaged search tree, as reported in [issue #80](https://github.com/hydrusvideodeduplicator/hydrus-video-deduplicator/issues/80), and `--prune-orphans` to remove videos whose perceptual hash is missing, and `--dry-run` to see the pairs without sending anything to Hydrus.
@@ -107,7 +107,7 @@ program, without these changes. To use this fork, follow [Quick start](#quick-st
 **Speed.** GPU video decoding with `--gpu-decode auto` (recommended; learns your own CPU and GPU speeds) or `--gpu-decode all`, a faster check for already-hashed files at startup, downloading
 the next file while the current one is hashed, an exact in-memory distance index and a shorter tree walk for
 "Finding potential duplicates", faster search tree building, and Hydrus calls that run alongside the search. See
-[Speed optimizations](#speed-optimizations).
+[Speed optimizations](#speed-optimizations). By default the tool runs at below-normal priority so your PC stays usable.
 
 **Fixes.** `--relink-search-tree` repairs a damaged search tree in seconds ([issue #80](https://github.com/hydrusvideodeduplicator/hydrus-video-deduplicator/issues/80)). `--prune-orphans` removes videos whose perceptual hash is missing so they can be hashed again. Each run also prints two quick read-only checks for those problems. CTRL+C while
 building the search tree saves only fully added videos. Videos with no usable frame rate in their header (some WebMs and GIFs)
@@ -228,6 +228,7 @@ More on running the program is in [Usage](./docs/usage.md).
 | [`--backup`](#--backup) | You want a copy of the dedupe database before each run changes it. |
 | [`--gpu-decode auto`](#gpu-decoding---gpu-decode-auto-or---gpu-decode-all) | You have an NVIDIA GPU. Recommended: hashing uses the GPU and the CPU together. `--gpu-decode all` tries to force all files to decode on the GPU. |
 | [`--reset-gpu-profile`](#gpu-decoding---gpu-decode-auto-or---gpu-decode-all) | Once, to make `--gpu-decode auto` relearn your CPU and GPU speeds. |
+| [`--normal-priority`](#--normal-priority) | You want the tool to run at full priority, even while you use your PC. |
 | [`--skip-repeat-pairs`](#--skip-repeat-pairs) | You want fewer Hydrus API calls while finding potential duplicates. |
 | [`--dry-run`](#--dry-run) | You want to see the pairs without sending them to Hydrus. |
 | [`--relink-search-tree`](#--relink-search-tree) | Once, if the program warns about search tree issues. |
@@ -297,6 +298,23 @@ so duplicate detection isn't affected.
   up where this one left off. If your CPU, GPU or NVIDIA driver changes, it starts learning again. If the file can't
   be read, it uses the rules above and starts learning again.
 - To make it start over, add `--reset-gpu-profile` to one run. In the GUI, delete `gpu_profile.json` instead.
+
+### `--normal-priority`
+
+By default the tool runs at below-normal priority so your PC stays usable. When the PC is idle, it still runs at nearly
+full speed. When you use other apps, they get the CPU first and the tool slows down.
+
+Add `--normal-priority` to run at normal priority. That is faster while you use the PC, but other apps may lag. Results
+are the same either way.
+
+```sh
+python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --normal-priority
+```
+
+- You can also set the environment variable `HVD_NORMAL_PRIORITY=1`. The GUI ignores command line flags, so use the
+  environment variable there.
+- To use fewer CPU threads, use `--job-count`. With `--gpu-decode auto`, the GPU side uses the same thread count too, so
+  the total can be about twice that.
 
 ### `--skip-repeat-pairs`
 

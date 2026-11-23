@@ -35,6 +35,7 @@ from hydrusvideodeduplicator.config import (
     Config,
 )
 from hydrusvideodeduplicator.dedup_util import TqdmLoggingHandler, display_path, print_and_log
+from hydrusvideodeduplicator.process_priority import apply_process_priority
 from hydrusvideodeduplicator.db_tools import (
     backup_message,
     check_database,
@@ -1072,6 +1073,7 @@ def gui_main(config: Config):
     )
     logger = logging.getLogger("main")
     logger.debug("Starting Hydrus Video Deduplicator.")
+    apply_process_priority()
 
     app = QApplication(sys.argv)
 

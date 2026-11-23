@@ -180,4 +180,3 @@ def run_rehash_overhashed(db: DedupeDB.DedupeDb, client: HVDClient, job_count: i
             highlight=False,
         )
     return result
-

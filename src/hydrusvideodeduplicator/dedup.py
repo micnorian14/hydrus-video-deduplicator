@@ -410,18 +410,15 @@ class DryRunPairWriter:
 
     @staticmethod
     def _line(rec: dict) -> str:
-        return (
-            json.dumps(
-                {
-                    "file_a": rec["file_a"],
-                    "file_b": rec["file_b"],
-                    "score_a_to_b": rec["score_a_to_b"],
-                    "score_b_to_a": rec["score_b_to_a"],
-                },
-                ensure_ascii=False,
-            )
-            + chr(10)
-        )
+        return json.dumps(
+            {
+                "file_a": rec["file_a"],
+                "file_b": rec["file_b"],
+                "score_a_to_b": rec["score_a_to_b"],
+                "score_b_to_a": rec["score_b_to_a"],
+            },
+            ensure_ascii=False,
+        ) + chr(10)
 
     def record(self, hash_a: str, hash_b: str, distance=None) -> None:
         score = similarity_from_search_distance(distance)

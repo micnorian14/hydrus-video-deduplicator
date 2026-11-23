@@ -41,6 +41,7 @@ from hydrusvideodeduplicator.dedup_util import (
     print_and_log,
     style_user_text,
 )
+from hydrusvideodeduplicator.process_priority import apply_process_priority
 from dotenv import find_dotenv, load_dotenv
 
 import sys
@@ -122,9 +123,7 @@ def main(
     ] = False,
     rehash_overhashed: Annotated[
         Optional[bool],
-        typer.Option(
-            help="Once: re-hash videos hashed with far too many frames (see README). Turns on --backup."
-        ),
+        typer.Option(help="Once: re-hash videos hashed with far too many frames (see README). Turns on --backup."),
     ] = False,
     failed_page_name: Annotated[
         Optional[str],
@@ -134,6 +133,10 @@ def main(
         Optional[int],
         typer.Option(help="Number of CPU threads to use for perceptual hashing. Default is all but one core."),
     ] = config.job_count,
+    normal_priority: Annotated[
+        Optional[bool],
+        typer.Option(help="Run at normal priority, even while you use your PC. Default is below-normal."),
+    ] = False,
     # Checked and normalized by normalize_gpu_decode_args; the default comes from GPU_DECODE.
     gpu_decode: Annotated[
         Optional[str],
@@ -198,6 +201,8 @@ def main(
     # Logs are separate from printing in this program.
     if not verbose:
         logging.disable()
+
+    apply_process_priority(normal_priority=bool(normal_priority))
 
     DedupeDB.set_db_dir(dedup_database_dir)
 
