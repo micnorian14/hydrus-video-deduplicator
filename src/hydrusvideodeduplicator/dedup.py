@@ -20,6 +20,7 @@ import contextlib
 import gc
 import os
 import queue
+import sqlite3
 import threading
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
@@ -1194,13 +1195,26 @@ class HydrusVideoDeduplicator:
                 if self.should_skip_step_fn and self.should_skip_step_fn():
                     return
 
-                self.db.add_file(file_hash)
-                self.db.add_perceptual_hash(perceptual_hash)
-                self.db.associate_file_with_perceptual_hash(file_hash, perceptual_hash)
-                self.db.execute(
-                    "DELETE FROM phashed_file_queue WHERE file_hash = :file_hash AND phash = :phash",
-                    {"file_hash": file_hash, "phash": perceptual_hash},
-                )
+                # Each video is added as one unit: on CTRL+C (or an error) its unfinished rows are rolled back and
+                # it stays in the queue, so only fully added videos are ever committed. A video left half added by
+                # an older version (file row, no map) is finished by the same statements on the next run.
+                if not self.db.conn.in_transaction:
+                    self.db.begin_transaction()  # after a periodic commit; a lone SAVEPOINT would commit on RELEASE
+                self.db.execute("SAVEPOINT hvd_queue_item;")
+                try:
+                    self.db.add_file(file_hash)
+                    self.db.add_perceptual_hash(perceptual_hash)
+                    self.db.associate_file_with_perceptual_hash(file_hash, perceptual_hash)
+                    self.db.execute(
+                        "DELETE FROM phashed_file_queue WHERE file_hash = :file_hash AND phash = :phash",
+                        {"file_hash": file_hash, "phash": perceptual_hash},
+                    )
+                except BaseException:
+                    with contextlib.suppress(sqlite3.Error):
+                        self.db.execute("ROLLBACK TO hvd_queue_item;")
+                        self.db.execute("RELEASE hvd_queue_item;")
+                    raise
+                self.db.execute("RELEASE hvd_queue_item;")
                 processed_count += 1
                 # Commit periodically to save progress in case something fails.
                 COMMIT_BATCH_SIZE = 64

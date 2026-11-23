@@ -20,7 +20,13 @@ from hydrusvideodeduplicator.client import (
 )
 from hydrusvideodeduplicator.config import Config, normalize_gpu_decode_args, resolve_gpu_decode
 from hydrusvideodeduplicator.db import DedupeDB
-from hydrusvideodeduplicator.db_tools import check_database, run_backup, run_prune, run_prune_orphans
+from hydrusvideodeduplicator.db_tools import (
+    check_database,
+    print_queue_waiting,
+    run_backup,
+    run_prune,
+    run_prune_orphans,
+)
 from hydrusvideodeduplicator.dedup import HydrusVideoDeduplicator, print_search_cache_warning
 from hydrusvideodeduplicator.dedup_util import (
     TqdmLoggingHandler,
@@ -287,6 +293,7 @@ def main(
         )
         # Read only. Each check is skipped when the flag that fixes it is given.
         check_database(db, check_orphans=not prune_orphans, check_tree=not (relink_search_tree or clear_search_tree))
+        print_queue_waiting(db)
         print_search_cache_warning()
 
         if prune_orphans:

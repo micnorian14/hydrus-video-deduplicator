@@ -727,6 +727,10 @@ class DedupeDb:
         all_phashed_files = [row[0] for row in all_phashed_files]
         return all_phashed_files
 
+    def count_queued_files(self) -> int:
+        """Number of hashed files still waiting in the phashed_file_queue to be added to the search tree."""
+        return self.execute("SELECT COUNT(*) FROM phashed_file_queue;").fetchone()[0]
+
     def get_num_phashed_files(self) -> int:
         """Get total number of all files that are phashed.  This includes the files in the phashed_file_queue."""
         query = """
