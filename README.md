@@ -304,8 +304,7 @@ so duplicate detection isn't affected.
 By default the tool runs at below-normal priority so your PC stays usable. When the PC is idle, it still runs at nearly
 full speed. When you use other apps, they get the CPU first and the tool slows down.
 
-Add `--normal-priority` to run at normal priority. That is faster while you use the PC, but other apps may lag. Results
-are the same either way.
+Add `--normal-priority` to run at normal priority. That is faster while you use the PC, but other apps may lag.
 
 ```sh
 python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --normal-priority
