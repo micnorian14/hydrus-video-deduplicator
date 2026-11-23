@@ -304,8 +304,7 @@ python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --skip-repeat-pairs
 ### `--dry-run`
 
 Hashes videos and searches for duplicates as usual, but sends nothing to Hydrus. Pairs it finds are written to a
-timestamped file in the dedupe database folder, named like `dry_run_pairs-20261122-212500.jsonl`. You can open that
-file in Rakaan's HVD Media Reviewer with Open pair report.
+timestamped file in the dedupe database folder, named like `dry_run_pairs-20261122-212500.jsonl`.
 
 ```sh
 python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --dry-run --dedup-database-dir="PATH_TO_A_COPY"
@@ -421,6 +420,10 @@ Failed files are sent to a Hydrus page named `failed` by default. Create a page 
 - If the page exists, failed files are added to it, and the program prints e.g. `Sent 1 failed file to the Hydrus page 'failed'.`
 - If the page does not exist, the run continues as usual. Only if files failed to hash, it prints: `Tip: Create a Hydrus page with the name 'failed' before running the program to see any files that failed to hash.`
 - `--failed-page-name` is still accepted. Use `--failed-page-name=yourname` (or the Failed Page Name box in the GUI, or `FAILED_PAGE_NAME`) to use a different page. The page is looked up once per run, so a missing page does not slow hashing or print errors.
+
+## Thanks
+
+Thanks to **Rakaan** for finding and reporting bugs, testing this fork on his own large library, and pushing for features like `--dry-run`. He spotted the over-hashing bug fixed by `--rehash-overhashed`, and his first test run with `--dry-run` led to a faster pairs file.
 
 The original upstream README is collapsed below.
 
