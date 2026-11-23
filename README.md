@@ -330,8 +330,6 @@ python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --skip-repeat-pairs
   in memory only.
 - Nothing is saved differently: the dedupe database is not changed, and Hydrus ends up with the same pairs.
 - Downloads, subscriptions and duplicate auto-resolution can keep running in Hydrus while it runs.
-- **Caveat:** don't clear or resync potential duplicates in Hydrus during the run. A pair that was already sent this
-  run would not be sent again. See the warning above.
 
 ### `--dry-run`
 
