@@ -146,7 +146,9 @@ Hydrus is, so your numbers will vary.
 | Finding potential duplicates, tool's own search (3,000-file test copy) | 36 min 9 s | 3 min 41 s, about 10× faster |
 | Finding potential duplicates, live run (same query) | 7.66 s per file | 3.82 files per second |
 
-These hashing numbers come from an RTX 5070 Ti with mixed real files. The gains add up at scale: on a large library, 1.8× faster turns an 80-hour hashing job into about 44 hours. On a slower CPU, limited to 4 threads, the gain was about 3×. `--gpu-decode auto` uses the GPU and the CPU together, so how much it helps depends on your CPU and GPU. If your GPU can't decode a video, it's hashed on the CPU instead. `--gpu-decode all` tries to send every video to the GPU. Auto was 1.5× faster than `all` on the 5600X and 1.1× faster on the 4-thread CPU. `all` mostly helps with HEVC and 4K videos, and can be slower than the CPU for VP8, VP9 and MPEG-4.
+These hashing numbers come from mixed real files on a Ryzen 5600X and an NVIDIA RTX 5070 Ti. The gains add up at scale: on a large library, 1.8× faster turns an 80-hour hashing job into about 44 hours. On a slower CPU limited to 4 threads, the gain was about 3×.
+
+`--gpu-decode auto` puts your NVIDIA GPU and CPU to work at the same time. Slower CPUs gain even more, and even an older Pascal series card can take some load off your processor. A built-in profiler learns which formats your GPU decodes faster and leaves the rest on the CPU, so it doesn't waste time on slow or unsupported codecs. Any video the GPU can't decode falls back to the CPU automatically. `--gpu-decode all` is the earlier mode that tries to send every video to the GPU instead of splitting the work. It's usually slower than `auto`, but I've left it in for anyone who wants to keep load off their CPU, has a weak processor, or wants consistent runs for troubleshooting and benchmarking.
 
 Some speedups have no flag and are always on, such as downloading the next file while the current one hashes. You can still turn them off for comparing to upstream or troubleshooting.
 
