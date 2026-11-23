@@ -148,7 +148,7 @@ Hydrus is, so your numbers will vary.
 
 These hashing numbers come from an RTX 5070 Ti with mixed real files. The gains add up at scale: on a large library, 1.8× faster turns an 80-hour hashing job into about 44 hours. On a slower CPU, limited to 4 threads, the gain was about 3×. `--gpu-decode auto` uses the GPU and the CPU together, so how much it helps depends on your CPU and GPU. If your GPU can't decode a video, it's hashed on the CPU instead. `--gpu-decode all` tries to send every video to the GPU. Auto was 1.5× faster than `all` on the 5600X and 1.1× faster on the 4-thread CPU. `all` mostly helps with HEVC and 4K videos, and can be slower than the CPU for VP8, VP9 and MPEG-4.
 
-Some speedups have no flag and are always on, such as downloading the next file while the current one hashes. You can turn them off to compare against the original or to rule one out while troubleshooting.
+Some speedups have no flag and are always on, such as downloading the next file while the current one hashes. You can still turn them off for comparing to upstream or troubleshooting.
 
 Set environment variables before running: in a `.bat` file add a line like `set HVD_PIPELINE=0` before the command,
 or in a Linux/macOS shell run `HVD_PIPELINE=0 python -m hydrusvideodeduplicator ...`.
