@@ -20,7 +20,9 @@ import contextlib
 import gc
 import os
 import queue
+import sqlite3
 import threading
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 import hydrusvideodeduplicator.hydrus_api as hydrus_api
@@ -29,7 +31,9 @@ from .client import HVDClient
 from .db import DedupeDB, vptree
 from .dedup_util import console_print, memory_status, print_success, print_user, style_user_text
 from .config import GPU_DECODE_AUTO
-from .hashing import compute_phash, last_decode_used_gpu, video_prefers_gpu_decode
+from .hashing import compute_phash, last_decode_used_gpu, probe_video_details, video_prefers_gpu_decode
+from . import gpu_profile
+from .gpu_profile import GpuProfile
 from .page_logger import HydrusPageLogger, resolve_failed_page_name
 from hvdaccelerators import vpdq
 
@@ -174,6 +178,48 @@ def print_gpu_decode_status(auto: bool = False) -> str:
         console_print(style_user_text(GPU_DECODE_AUTO_NO_DEVICE if auto else GPU_DECODE_NO_DEVICE), highlight=False)
     print()
     return status
+
+
+# --gpu-decode auto: the profile of this computer's CPU and GPU speeds (see gpu_profile.py).
+GPU_PROFILE_CORRUPT = "WARNING: Couldn't read the GPU profile, so auto mode starts again from its default rules."
+GPU_PROFILE_NEW_HARDWARE = "Hardware changed, so auto mode is relearning your CPU and GPU speeds."
+GPU_PROFILE_RESET = "GPU profile reset."
+
+
+def gpu_profile_save_failed_message(error: str) -> str:
+    return f"WARNING: Couldn't save the GPU profile: {error}"
+
+
+def setup_gpu_profile(db_dir, job_count: int, reset: bool, active: bool) -> GpuProfile | None:
+    """Load the --gpu-decode auto profile (active), and/or delete it (reset). Prints at most one line plus a blank
+    line. Never raises: any problem just means auto mode uses its fixed rules."""
+    try:
+        path = Path(db_dir) / gpu_profile.PROFILE_FILE_NAME if isinstance(db_dir, (str, Path)) else None
+        if not active:
+            if reset:
+                gpu_profile.remove_profile(path)
+                print(f"[blue]{GPU_PROFILE_RESET}")
+                print()
+            return None
+        profile, status = GpuProfile.load(path, gpu_profile.hardware_fingerprint(job_count), reset=reset)
+    except Exception:
+        return None
+    if status == gpu_profile.CORRUPT:
+        console_print(style_user_text(GPU_PROFILE_CORRUPT), highlight=False)
+        print()
+    elif status == gpu_profile.RESET:
+        print(f"[blue]{GPU_PROFILE_RESET}")
+        print()
+    elif status == gpu_profile.HARDWARE_CHANGED:
+        print(f"[blue]{GPU_PROFILE_NEW_HARDWARE}")
+        print()
+    return profile
+
+
+def _save_gpu_profile_at_exit(profile: GpuProfile) -> None:
+    if not profile.save() and not profile.save_error_reported:
+        profile.save_error_reported = True
+        console_print(style_user_text(gpu_profile_save_failed_message(profile.save_error or "")), highlight=False)
 
 
 def gpu_decode_auto_summary(gpu_count: int, cpu_count: int) -> str:
@@ -510,6 +556,7 @@ class HydrusVideoDeduplicator:
         should_skip_step_fn: Callable[[], bool] | None = None,
         gpu_decode: bool | str = False,
         skip_repeat_pairs: bool = False,
+        reset_gpu_profile: bool = False,
     ):
         self.db = db
         # False: CPU decode. True: GPU decode (--gpu-decode). GPU_DECODE_AUTO: --gpu-decode auto.
@@ -521,6 +568,15 @@ class HydrusVideoDeduplicator:
             self.gpu_decode_available = status == GPU_STATUS_ON
             if status == GPU_STATUS_NO_NVDEC and not self.gpu_decode_auto:
                 self.gpu_decode = False  # no video could be GPU decoded
+        # --gpu-decode auto with a CUDA device: what it learned about this computer's speeds (see gpu_profile.py).
+        self.gpu_profile = None
+        if reset_gpu_profile or (self.gpu_decode_auto and self.gpu_decode_available):
+            self.gpu_profile = setup_gpu_profile(
+                getattr(db, "db_dir", None),
+                job_count,
+                reset=reset_gpu_profile,
+                active=self.gpu_decode_auto and self.gpu_decode_available,
+            )
         self.skip_repeat_pairs = skip_repeat_pairs
         self.client = client
         self.similarity_threshold = similarity_threshold
@@ -592,6 +648,12 @@ class HydrusVideoDeduplicator:
                         self.update_progress_callback(NoneProgress(None))
                     if self.gpu_decode_auto and (stats.gpu_decoded_count or stats.cpu_decoded_count):
                         print(f"[blue]{gpu_decode_auto_summary(stats.gpu_decoded_count, stats.cpu_decoded_count)}")
+                    profile = getattr(self, "gpu_profile", None)
+                    if self.gpu_decode_auto and profile is not None and profile.save_error:
+                        profile.save_error_reported = True
+                        console_print(
+                            style_user_text(gpu_profile_save_failed_message(profile.save_error)), highlight=False
+                        )
                     # Print some useful stats and info for users
                     total_failures = stats.failed_from_api_errors_count + stats.failed_from_phash_count
                     if total_failures > 0:
@@ -777,16 +839,23 @@ class HydrusVideoDeduplicator:
         * Results come back to this (main) thread, which alone does the DB writes, the commit every 4 videos, the
           failed-page and progress updates (_save_phash_result), same as the normal loop. The order can differ.
         * No CUDA device: everything is hashed by the CPU worker.
+        * With a GPU profile (self.gpu_profile, see gpu_profile.py): each video is timed, and once a kind of video
+          (codec and resolution) is measured on both devices it goes to the faster one. An idle worker may also take
+          a video meant for the busy one when the profile says it's about as fast for it (both directions), and an
+          idle CPU worker may time a few GPU videos of a kind it hasn't measured yet while the GPU has a backlog.
+          The profile is saved at the end, and at exit after Ctrl+C.
         * Ctrl+C or the GUI's skip: no more videos are handed out. Videos still being hashed are not saved and are
           hashed again next run, like an interrupted video in the normal loop. After the skip or a normal end this
           waits up to AUTO_JOIN_S for the threads to stop; after Ctrl+C it returns at once and waits at exit.
         """
         use_gpu = self.gpu_decode_available
+        profile = getattr(self, "gpu_profile", None) if use_gpu else None
         gpu_threads, share_work = auto_worker_settings(logical_cpu_count(), filehasher.num_threads)
         gpu_filehasher = FileHasher(self.client, gpu_threads)
         total = len(video_hashes)
         cond = threading.Condition()
-        waiting: list = []  # (file_hash, file bytes or HydrusApiException, prefers GPU, hash alone)
+        # (file_hash, file bytes or HydrusApiException, prefers GPU, hash alone, video info or None)
+        waiting: list = []
         busy = {True: False, False: False}  # by worker: True = GPU worker, False = CPU worker
         memory = {"videos": 0, "alone": 0, "largest": 0}  # videos waiting or being hashed; how many to hash alone
         fetch_done = threading.Event()
@@ -812,7 +881,11 @@ class HydrusVideoDeduplicator:
                         return
                     fetched = filehasher.fetch_file_or_error(file_hash)
                     is_file = not isinstance(fetched, HydrusApiException)
-                    wants_gpu = use_gpu and is_file and video_prefers_gpu_decode(fetched)
+                    info = probe_video_details(fetched) if profile is not None and is_file else None
+                    if info is not None:
+                        wants_gpu = profile.prefers_gpu(*info[:3])
+                    else:
+                        wants_gpu = use_gpu and is_file and video_prefers_gpu_decode(fetched)
                     alone = False
                     if is_file:
                         status = memory_status()
@@ -822,7 +895,7 @@ class HydrusVideoDeduplicator:
                             memory["largest"] = max(memory["largest"], len(fetched))
                         memory["videos"] += 1
                         memory["alone"] += alone
-                        waiting.append((file_hash, fetched, wants_gpu, alone))
+                        waiting.append((file_hash, fetched, wants_gpu, alone, info))
                         cond.notify_all()
                     del fetched
             except BaseException as exc:
@@ -837,7 +910,15 @@ class HydrusVideoDeduplicator:
                 while not stop.is_set():
                     index = next((i for i, item in enumerate(waiting) if item[2] == on_gpu), None)
                     if index is None and waiting and share_work and on_gpu and busy[False]:
-                        index = 0
+                        if profile is None:
+                            index = 0
+                        else:
+                            index = next((i for i, item in enumerate(waiting) if profile.gpu_may_help(item[4])), None)
+                    if index is None and waiting and share_work and not on_gpu and busy[True] and profile is not None:
+                        explore = len(waiting) >= gpu_profile.CPU_EXPLORE_MIN_BACKLOG and not fetch_done.is_set()
+                        index = next(
+                            (i for i, item in enumerate(waiting) if profile.cpu_may_help(item[4], explore)), None
+                        )
                     if index is not None and waiting[index][3] and busy[not on_gpu]:
                         index = None  # a video to hash alone waits until the other worker is done
                     if index is not None and not any(item[3] for item in waiting[:index]) and not hashing_alone():
@@ -861,9 +942,14 @@ class HydrusVideoDeduplicator:
                     item = take(on_gpu)
                     if item is None:
                         return
-                    file_hash, fetched, _, alone = item
+                    file_hash, fetched, _, alone, info = item
                     del item
+                    started = time.perf_counter()
                     result = hasher.phash_fetched_file(file_hash, fetched, gpu_decode=on_gpu)
+                    if profile is not None and info is not None and isinstance(result, PerceptuallyHashedFile):
+                        # Timed on the worker that took it, including a GPU video that fell back to the CPU: that's
+                        # what sending this kind of video to the GPU worker costs.
+                        profile.record(*info, on_gpu=on_gpu, seconds=time.perf_counter() - started)
                     decoded = not isinstance(fetched, HydrusApiException)
                     used_gpu = last_decode_used_gpu() if on_gpu else False
                     decoded_on_gpu = on_gpu if used_gpu is None else used_gpu
@@ -920,9 +1006,14 @@ class HydrusVideoDeduplicator:
                 waiting.clear()
                 cond.notify_all()
             if interrupted:
+                if profile is not None:
+                    # atexit runs the last registered first: wait for the workers, then save what they timed.
+                    atexit.register(_save_gpu_profile_at_exit, profile)
                 atexit.register(_join_threads, threads, AUTO_EXIT_JOIN_S)
             else:
                 _join_threads(threads, AUTO_JOIN_S)
+            if profile is not None:
+                profile.save()
 
     def _find_potential_duplicates_pipelined(self, tree, files, search_threshold, send=None) -> int:
         """
@@ -1104,13 +1195,26 @@ class HydrusVideoDeduplicator:
                 if self.should_skip_step_fn and self.should_skip_step_fn():
                     return
 
-                self.db.add_file(file_hash)
-                self.db.add_perceptual_hash(perceptual_hash)
-                self.db.associate_file_with_perceptual_hash(file_hash, perceptual_hash)
-                self.db.execute(
-                    "DELETE FROM phashed_file_queue WHERE file_hash = :file_hash AND phash = :phash",
-                    {"file_hash": file_hash, "phash": perceptual_hash},
-                )
+                # Each video is added as one unit: on CTRL+C (or an error) its unfinished rows are rolled back and
+                # it stays in the queue, so only fully added videos are ever committed. A video left half added by
+                # an older version (file row, no map) is finished by the same statements on the next run.
+                if not self.db.conn.in_transaction:
+                    self.db.begin_transaction()  # after a periodic commit; a lone SAVEPOINT would commit on RELEASE
+                self.db.execute("SAVEPOINT hvd_queue_item;")
+                try:
+                    self.db.add_file(file_hash)
+                    self.db.add_perceptual_hash(perceptual_hash)
+                    self.db.associate_file_with_perceptual_hash(file_hash, perceptual_hash)
+                    self.db.execute(
+                        "DELETE FROM phashed_file_queue WHERE file_hash = :file_hash AND phash = :phash",
+                        {"file_hash": file_hash, "phash": perceptual_hash},
+                    )
+                except BaseException:
+                    with contextlib.suppress(sqlite3.Error):
+                        self.db.execute("ROLLBACK TO hvd_queue_item;")
+                        self.db.execute("RELEASE hvd_queue_item;")
+                    raise
+                self.db.execute("RELEASE hvd_queue_item;")
                 processed_count += 1
                 # Commit periodically to save progress in case something fails.
                 COMMIT_BATCH_SIZE = 64

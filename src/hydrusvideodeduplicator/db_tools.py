@@ -192,6 +192,28 @@ def check_database(
     return counts
 
 
+def queue_waiting_message(count: int) -> str | None:
+    """Startup line for hashed videos not yet in the search tree (e.g. after CTRL+C while building it)."""
+    if count <= 0:
+        return None
+    if count == 1:
+        return "1 hashed video is still waiting to be added to the search tree."
+    return f"{count} hashed videos are still waiting to be added to the search tree."
+
+
+def print_queue_waiting(db: DedupeDB.DedupeDb) -> int:
+    """Startup (read only): one info line, only when the queue is not empty. Returns the queue size."""
+    try:
+        count = db.count_queued_files()
+    except sqlite3.Error as exc:
+        log.warning(f"Could not count the videos waiting to be added to the search tree: {exc}")
+        return 0
+    message = queue_waiting_message(count)
+    if message:
+        print_and_log(log, message)
+    return count
+
+
 def _print_check(message: str) -> None:
     if message.startswith("WARNING:"):
         print_and_log(log, message, logging.WARNING, highlight=False)

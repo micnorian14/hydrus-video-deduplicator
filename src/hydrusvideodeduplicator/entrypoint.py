@@ -20,7 +20,13 @@ from hydrusvideodeduplicator.client import (
 )
 from hydrusvideodeduplicator.config import Config, normalize_gpu_decode_args, resolve_gpu_decode
 from hydrusvideodeduplicator.db import DedupeDB
-from hydrusvideodeduplicator.db_tools import check_database, run_backup, run_prune, run_prune_orphans
+from hydrusvideodeduplicator.db_tools import (
+    check_database,
+    print_queue_waiting,
+    run_backup,
+    run_prune,
+    run_prune_orphans,
+)
 from hydrusvideodeduplicator.dedup import HydrusVideoDeduplicator, print_search_cache_warning
 from hydrusvideodeduplicator.dedup_util import (
     TqdmLoggingHandler,
@@ -120,11 +126,17 @@ def main(
         Optional[bool],
         typer.Option(
             help="Decode videos on an NVIDIA GPU (CUDA). Falls back to CPU if a video can't be GPU decoded. "
-            "'--gpu-decode auto' uses the GPU and the CPU together, each video on whichever is usually faster for it."
+            "'--gpu-decode auto' uses the GPU and the CPU together and learns which is faster for each kind of video."
         ),
     ] = config.gpu_decode,
     # Set by '--gpu-decode auto' (see normalize_gpu_decode_args) or GPU_DECODE=auto.
     gpu_decode_auto: Annotated[Optional[bool], typer.Option(hidden=True)] = config.gpu_decode_auto,
+    reset_gpu_profile: Annotated[
+        Optional[bool],
+        typer.Option(
+            help="Make '--gpu-decode auto' forget the CPU and GPU speeds it learned (gpu_profile.json) and start over."
+        ),
+    ] = False,
     skip_repeat_pairs: Annotated[
         Optional[bool],
         typer.Option(help="Send each pair to Hydrus once per run instead of twice (faster)."),
@@ -283,6 +295,7 @@ def main(
         )
         # Read only. Each check is skipped when the flag that fixes it is given.
         check_database(db, check_orphans=not prune_orphans, check_tree=not (relink_search_tree or clear_search_tree))
+        print_queue_waiting(db)
         print_search_cache_warning()
 
         if prune_orphans:
@@ -343,6 +356,7 @@ def main(
         custom_query=query,
         gpu_decode=resolve_gpu_decode(gpu_decode, gpu_decode_auto),
         skip_repeat_pairs=bool(skip_repeat_pairs),
+        reset_gpu_profile=bool(reset_gpu_profile),
     )
 
     if debug:

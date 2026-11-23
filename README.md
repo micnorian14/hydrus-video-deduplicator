@@ -98,12 +98,13 @@ program, without these changes. To use this fork, follow [Quick start](#quick-st
 
 ## What's new in this fork
 
-**Speed.** GPU video decoding, a faster check for already-hashed files at startup, downloading
+**Speed.** GPU video decoding (auto mode learns your own CPU and GPU speeds), a faster check for already-hashed files at startup, downloading
 the next file while the current one is hashed, an exact in-memory distance index and a shorter tree walk for
 "Finding potential duplicates", faster search tree building, and Hydrus calls that run alongside the search. See
 [Speed optimizations](#speed-optimizations-this-fork).
 
-**Fixes.** `--relink-search-tree` repairs a damaged search tree in seconds ([issue #80](https://github.com/hydrusvideodeduplicator/hydrus-video-deduplicator/issues/80)). `--prune-orphans` removes videos whose perceptual hash is missing so they can be hashed again. Each run also prints two quick read-only checks for those problems. Error and
+**Fixes.** `--relink-search-tree` repairs a damaged search tree in seconds ([issue #80](https://github.com/hydrusvideodeduplicator/hydrus-video-deduplicator/issues/80)). `--prune-orphans` removes videos whose perceptual hash is missing so they can be hashed again. Each run also prints two quick read-only checks for those problems. CTRL+C while
+building the search tree saves only fully added videos. Error and
 "broken branch" messages no longer break the progress bar. Full-width lines keep their line break in the Windows
 console.
 
@@ -201,6 +202,14 @@ Run once with --relink-search-tree to repair it. Your database is backed up auto
 
 The search tree check looks for the kind of damage from [issue #80](https://github.com/hydrusvideodeduplicator/hydrus-video-deduplicator/issues/80). It does not flag a half-built tree, files still waiting to be hashed, or the tree shape left by `--relink-search-tree`.
 
+If you stopped a run before "Building search tree" finished, the next run also prints a line like this:
+
+```
+289 hashed videos are still waiting to be added to the search tree.
+```
+
+This is normal. Those videos are already hashed and saved, and the next run adds them to the search tree.
+
 ## New flags
 
 The flags below are off by default, except that failed files go to a Hydrus page named `failed` if that page exists. Add the flags you want to the command you already use, for example
@@ -210,6 +219,7 @@ More on running the program is in [Usage](./docs/usage.md).
 | Flag | Use it when |
 |---|---|
 | [`--gpu-decode`](#--gpu-decode) | You have an NVIDIA GPU and want hashing to use it for video decoding. `--gpu-decode auto` uses the GPU and the CPU together. |
+| [`--reset-gpu-profile`](#--gpu-decode) | Once, to make `--gpu-decode auto` relearn your CPU and GPU speeds. |
 | [`--skip-repeat-pairs`](#--skip-repeat-pairs) | You want fewer Hydrus API calls while finding potential duplicates. |
 | [`--relink-search-tree`](#--relink-search-tree) | Once, if the program warns about search tree issues. |
 | [`--backup`](#--backup) | You want a copy of the dedupe database before each run changes it. |
@@ -227,9 +237,10 @@ video can't be decoded on the GPU, a warning is logged and that video is hashed 
 python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --gpu-decode
 ```
 
-`--gpu-decode auto` uses the GPU and the CPU at the same time, on different videos. Each video goes where it usually
-hashes faster: HEVC (except very small videos) and H.264 at about 1440p and above go to the GPU, the rest to the CPU.
-When the GPU has nothing to do, it also takes CPU videos. The hashes are the same either way, and at the end it prints
+`--gpu-decode auto` uses the GPU and the CPU at the same time, on different videos, and learns which one is faster on
+your computer for each kind of video. It starts with these rules: HEVC (except very small videos) and H.264 at about
+1440p and above go to the GPU, the rest to the CPU. When the GPU has nothing to do, it also takes CPU videos. Once auto
+mode has learned your speeds, an idle CPU also takes GPU videos it hashes nearly as fast. The hashes are the same either way, and at the end it prints
 how many videos went to each. If you have an NVIDIA GPU, this is the one to use. Without one, it just uses the CPU.
 
 ```sh
@@ -246,7 +257,14 @@ python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --gpu-decode auto
   flags, so use the environment variable there.
 - With more than one NVIDIA GPU, the first one is used. Set `GPU_DECODE_DEVICE=1` to use the second one (0 is the
   first), or choose which GPUs the program can see with `CUDA_VISIBLE_DEVICES`.
-- Coming soon: auto mode will learn how fast your own CPU and GPU handle each kind of video and split the work to match. Right now it uses fixed rules based on common hardware.
+- If the GPU can't decode a video (for example HEVC on an older card), that video is hashed once on the CPU instead.
+  It never bounces back and forth, and auto mode learns to stop sending that kind of video to the GPU.
+- Auto mode learns your computer's speeds as it goes. Once it has timed at least 5 videos of the same kind (same
+  codec and resolution) on both the GPU and the CPU, it sends that kind to whichever was faster. Until then it uses
+  the rules above. It saves what it learned in `gpu_profile.json` next to the dedupe database, so the next run picks
+  up where this one left off. If your CPU, GPU or NVIDIA driver changes, it starts learning again. If the file can't
+  be read, it uses the rules above and starts learning again.
+- To make it start over, add `--reset-gpu-profile` to one run. In the GUI, delete `gpu_profile.json` instead.
 
 ### `--skip-repeat-pairs`
 
