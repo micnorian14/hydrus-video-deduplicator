@@ -18,7 +18,12 @@ from hydrusvideodeduplicator.client import (
     HVDClient,
     create_client,
 )
-from hydrusvideodeduplicator.config import Config, normalize_gpu_decode_args, resolve_gpu_decode
+from hydrusvideodeduplicator.config import (
+    Config,
+    GpuDecodeArgError,
+    normalize_gpu_decode_args,
+    resolve_gpu_decode,
+)
 from hydrusvideodeduplicator.db import DedupeDB
 from hydrusvideodeduplicator.db_tools import (
     check_database,
@@ -122,15 +127,16 @@ def main(
         Optional[int],
         typer.Option(help="Number of CPU threads to use for perceptual hashing. Default is all but one core."),
     ] = config.job_count,
+    # Checked and normalized by normalize_gpu_decode_args; the default comes from GPU_DECODE.
     gpu_decode: Annotated[
-        Optional[bool],
+        Optional[str],
         typer.Option(
-            help="Decode videos on an NVIDIA GPU (CUDA). Falls back to CPU if a video can't be GPU decoded. "
-            "'--gpu-decode auto' uses the GPU and the CPU together and learns which is faster for each kind of video."
+            metavar="[auto|all|off]",
+            help="Decode videos on an NVIDIA GPU (CUDA). 'auto' (recommended) uses the GPU and the CPU together and "
+            "learns which is faster for each kind of video. 'all' tries to force all files to decode on the GPU. "
+            "'off' uses only the CPU.",
         ),
-    ] = config.gpu_decode,
-    # Set by '--gpu-decode auto' (see normalize_gpu_decode_args) or GPU_DECODE=auto.
-    gpu_decode_auto: Annotated[Optional[bool], typer.Option(hidden=True)] = config.gpu_decode_auto,
+    ] = config.gpu_decode_mode,
     reset_gpu_profile: Annotated[
         Optional[bool],
         typer.Option(
@@ -217,7 +223,7 @@ def main(
         console_print(
             style_user_text(
                 f"WARNING: Unknown GPU_DECODE value '{config.gpu_decode_invalid}', so GPU decode is off. "
-                "Use 1, 0 or auto."
+                "Use auto, all or off."
             ),
             highlight=False,
         )
@@ -354,7 +360,7 @@ def main(
         job_count=job_count,
         failed_page_name=failed_page_name,
         custom_query=query,
-        gpu_decode=resolve_gpu_decode(gpu_decode, gpu_decode_auto),
+        gpu_decode=resolve_gpu_decode(gpu_decode),
         skip_repeat_pairs=bool(skip_repeat_pairs),
         reset_gpu_profile=bool(reset_gpu_profile),
     )
@@ -410,7 +416,12 @@ def run_main(gui: bool, is_executable: bool):
                 # Same as typer.run(main), plus the help text and the optimization switches at the end of --help.
                 app = typer.Typer(add_completion=False)
                 app.command(help=CLI_HELP, epilog=CLI_EPILOG)(main)
-                app(args=normalize_gpu_decode_args(sys.argv[1:]))
+                try:
+                    args = normalize_gpu_decode_args(sys.argv[1:])
+                except GpuDecodeArgError as exc:
+                    console_print(style_user_text(str(exc)), highlight=False)
+                    raise SystemExit(2) from exc
+                app(args=args)
             except KeyboardInterrupt as exc:
                 raise typer.Exit(-1) from exc
             finally:

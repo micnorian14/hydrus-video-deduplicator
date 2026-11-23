@@ -11,7 +11,9 @@ from typer.testing import CliRunner
 from hydrusvideodeduplicator import dedup
 from hydrusvideodeduplicator.config import (
     GPU_DECODE_AUTO,
+    GPU_DECODE_NEEDS_VALUE,
     Config,
+    GpuDecodeArgError,
     normalize_gpu_decode_args,
     resolve_gpu_decode,
 )
@@ -45,54 +47,70 @@ class TestPrefersGpuDecode(unittest.TestCase):
 
 class TestGpuDecodeArgs(unittest.TestCase):
     def test_auto_value(self):
-        self.assertEqual(normalize_gpu_decode_args(["--gpu-decode", "auto"]), ["--gpu-decode-auto"])
-        self.assertEqual(normalize_gpu_decode_args(["--gpu-decode", "AUTO"]), ["--gpu-decode-auto"])
-        self.assertEqual(normalize_gpu_decode_args(["--gpu-decode=auto"]), ["--gpu-decode-auto"])
+        self.assertEqual(normalize_gpu_decode_args(["--gpu-decode", "auto"]), ["--gpu-decode", "auto"])
+        self.assertEqual(normalize_gpu_decode_args(["--gpu-decode", "AUTO"]), ["--gpu-decode", "auto"])
+        self.assertEqual(normalize_gpu_decode_args(["--gpu-decode=auto"]), ["--gpu-decode", "auto"])
         self.assertEqual(
             normalize_gpu_decode_args(["--api-url", "x", "--gpu-decode", "auto", "--verbose"]),
-            ["--api-url", "x", "--gpu-decode-auto", "--verbose"],
+            ["--api-url", "x", "--gpu-decode", "auto", "--verbose"],
         )
 
-    def test_bare_flag_and_off_unchanged(self):
-        self.assertEqual(normalize_gpu_decode_args(["--gpu-decode"]), ["--gpu-decode", "--no-gpu-decode-auto"])
+    def test_all_value(self):
+        self.assertEqual(normalize_gpu_decode_args(["--gpu-decode", "all"]), ["--gpu-decode", "all"])
+        self.assertEqual(normalize_gpu_decode_args(["--gpu-decode", "ALL"]), ["--gpu-decode", "all"])
+        self.assertEqual(normalize_gpu_decode_args(["--gpu-decode=all"]), ["--gpu-decode", "all"])
+        self.assertEqual(normalize_gpu_decode_args(["--gpu-decode", "off"]), ["--gpu-decode", "off"])
+
+    def test_bare_flag_is_an_error(self):
+        for args in (["--gpu-decode"], ["--gpu-decode", "--verbose"], ["--verbose", "--gpu-decode"]):
+            with self.assertRaises(GpuDecodeArgError) as caught:
+                normalize_gpu_decode_args(args)
+            self.assertEqual(str(caught.exception), GPU_DECODE_NEEDS_VALUE, args)
         self.assertEqual(
-            normalize_gpu_decode_args(["--gpu-decode", "--verbose"]),
-            ["--gpu-decode", "--no-gpu-decode-auto", "--verbose"],
+            GPU_DECODE_NEEDS_VALUE,
+            "--gpu-decode now needs a value. Use --gpu-decode auto (recommended) or --gpu-decode all.\n"
+            "--gpu-decode all tries to force all files to decode on the GPU.",
         )
-        self.assertEqual(normalize_gpu_decode_args(["--no-gpu-decode"]), ["--no-gpu-decode", "--no-gpu-decode-auto"])
+
+    def test_unknown_value_is_an_error(self):
+        for args in (["--gpu-decode", "maybe"], ["--gpu-decode=maybe"], ["--gpu-decode="]):
+            with self.assertRaises(GpuDecodeArgError, msg=args):
+                normalize_gpu_decode_args(args)
+
+    def test_other_args_unchanged(self):
+        self.assertEqual(normalize_gpu_decode_args(["--no-gpu-decode"]), ["--gpu-decode", "off"])
         self.assertEqual(normalize_gpu_decode_args([]), [])
         self.assertEqual(normalize_gpu_decode_args(["--verbose"]), ["--verbose"])
-        self.assertEqual(normalize_gpu_decode_args(["--", "--gpu-decode", "auto"]), ["--", "--gpu-decode", "auto"])
+        self.assertEqual(normalize_gpu_decode_args(["--", "--gpu-decode"]), ["--", "--gpu-decode"])
 
     def test_resolve(self):
-        self.assertEqual(resolve_gpu_decode(False, True), GPU_DECODE_AUTO)
-        self.assertEqual(resolve_gpu_decode(True, True), GPU_DECODE_AUTO)
-        self.assertIs(resolve_gpu_decode(True, False), True)
-        self.assertIs(resolve_gpu_decode(False, False), False)
-        self.assertIs(resolve_gpu_decode(None, None), False)
+        self.assertEqual(resolve_gpu_decode("auto"), GPU_DECODE_AUTO)
+        self.assertIs(resolve_gpu_decode("all"), True)
+        self.assertIs(resolve_gpu_decode("off"), False)
+        self.assertIs(resolve_gpu_decode(None), False)
 
     def test_env_var(self):
-        for value in ["1", "true", "yes", "on", " ON "]:
+        for value in ["all", "ALL", "1", "true", "yes", "on", " ON "]:
             config = Config._load({"GPU_DECODE": value})
             self.assertEqual((config.gpu_decode, config.gpu_decode_auto), (True, False), value)
+            self.assertEqual(config.gpu_decode_mode, "all", value)
         for value in ["auto", "AUTO", " auto "]:
             config = Config._load({"GPU_DECODE": value})
             self.assertEqual((config.gpu_decode, config.gpu_decode_auto), (False, True), value)
+            self.assertEqual(config.gpu_decode_mode, "auto", value)
         for value in ["0", "false", "", "off"]:
             config = Config._load({"GPU_DECODE": value})
             self.assertEqual((config.gpu_decode, config.gpu_decode_auto), (False, False), value)
+            self.assertEqual(config.gpu_decode_mode, "off", value)
         config = Config._load({})
         self.assertEqual((config.gpu_decode, config.gpu_decode_auto), (False, False))
 
-    def _parse(self, args: list[str], env_gpu_decode: bool = False, env_auto: bool = False):
-        """Parse like entrypoint.main does: the same two options and the same argument normalization."""
+    def _parse(self, args: list[str], env_mode: str = "off"):
+        """Parse like entrypoint.main does: the same option and the same argument normalization."""
         seen = {}
 
-        def main(
-            gpu_decode: Annotated[Optional[bool], typer.Option()] = env_gpu_decode,
-            gpu_decode_auto: Annotated[Optional[bool], typer.Option(hidden=True)] = env_auto,
-        ):
-            seen["value"] = resolve_gpu_decode(gpu_decode, gpu_decode_auto)
+        def main(gpu_decode: Annotated[Optional[str], typer.Option()] = env_mode):
+            seen["value"] = resolve_gpu_decode(gpu_decode)
 
         app = typer.Typer(add_completion=False)
         app.command()(main)
@@ -102,17 +120,18 @@ class TestGpuDecodeArgs(unittest.TestCase):
 
     def test_cli(self):
         self.assertIs(self._parse([]), False)
-        self.assertIs(self._parse(["--gpu-decode"]), True)
+        self.assertIs(self._parse(["--gpu-decode", "all"]), True)
+        self.assertIs(self._parse(["--gpu-decode", "off"]), False)
         self.assertIs(self._parse(["--no-gpu-decode"]), False)
         self.assertEqual(self._parse(["--gpu-decode", "auto"]), GPU_DECODE_AUTO)
         self.assertEqual(self._parse(["--gpu-decode=auto"]), GPU_DECODE_AUTO)
-        # GPU_DECODE=1 / GPU_DECODE=auto from the environment, and the command line overriding them
-        self.assertIs(self._parse([], env_gpu_decode=True), True)
-        self.assertEqual(self._parse([], env_auto=True), GPU_DECODE_AUTO)
-        self.assertIs(self._parse(["--gpu-decode"], env_auto=True), True)
-        self.assertIs(self._parse(["--no-gpu-decode"], env_auto=True), False)
-        self.assertEqual(self._parse(["--gpu-decode", "auto"], env_gpu_decode=True), GPU_DECODE_AUTO)
-        self.assertIs(self._parse(["--gpu-decode", "auto", "--gpu-decode"]), True)  # last one wins
+        # GPU_DECODE=all / GPU_DECODE=auto from the environment, and the command line overriding them
+        self.assertIs(self._parse([], env_mode="all"), True)
+        self.assertEqual(self._parse([], env_mode="auto"), GPU_DECODE_AUTO)
+        self.assertIs(self._parse(["--gpu-decode", "all"], env_mode="auto"), True)
+        self.assertIs(self._parse(["--gpu-decode", "off"], env_mode="auto"), False)
+        self.assertEqual(self._parse(["--gpu-decode", "auto"], env_mode="all"), GPU_DECODE_AUTO)
+        self.assertIs(self._parse(["--gpu-decode", "auto", "--gpu-decode", "all"]), True)  # last one wins
 
 
 class _FakePhash:

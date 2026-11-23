@@ -141,8 +141,8 @@ SEARCH_CACHE_WARNING = (
 )
 
 
-GPU_DECODE_ON = "Using GPU decode (CUDA)."
-GPU_DECODE_NO_DEVICE = "WARNING: --gpu-decode: no CUDA device found, decoding on the CPU."
+GPU_DECODE_ON = "Using GPU decode (all)."
+GPU_DECODE_NO_DEVICE = "WARNING: --gpu-decode all: no CUDA device found, decoding on the CPU."
 GPU_DECODE_AUTO_ON = "Using GPU decode (auto)."
 GPU_DECODE_AUTO_NO_DEVICE = "WARNING: --gpu-decode auto: no CUDA device found, decoding on the CPU."
 GPU_DECODE_NO_NVDEC = (
@@ -159,7 +159,7 @@ GPU_STATUS_NO_NVDEC = "no_nvdec"
 def print_gpu_decode_status(auto: bool = False) -> str:
     """Say once whether GPU decoding can be used, with a blank line after. Returns a GPU_STATUS_* value.
 
-    No CUDA device: plain --gpu-decode keeps trying per video (unchanged), auto doesn't start its GPU worker.
+    No CUDA device: --gpu-decode all keeps trying per video (unchanged), auto doesn't start its GPU worker.
     CUDA but no NVIDIA video decoder library (NVDEC): GPU decode is turned off for the run.
     """
     try:
@@ -561,7 +561,7 @@ class HydrusVideoDeduplicator:
         reset_gpu_profile: bool = False,
     ):
         self.db = db
-        # False: CPU decode. True: GPU decode (--gpu-decode). GPU_DECODE_AUTO: --gpu-decode auto.
+        # False: CPU decode. True: GPU decode (--gpu-decode all). GPU_DECODE_AUTO: --gpu-decode auto.
         self.gpu_decode = gpu_decode
         self.gpu_decode_auto = gpu_decode == GPU_DECODE_AUTO
         self.gpu_decode_available = False
@@ -838,7 +838,7 @@ class HydrusVideoDeduplicator:
           the oldest waiting CPU video while the CPU worker is busy. Hashes are identical for the codecs tested
           (H.264, HEVC, VP8, VP9). MPEG-4 and WMV3 can differ by a few bits but still score as a full match, so
           duplicate detection isn't affected and this only changes speed. Fewer than 4 CPUs: see auto_worker_settings.
-        * A video that fails on the GPU is retried on the CPU (compute_phash), same as plain --gpu-decode.
+        * A video that fails on the GPU is retried on the CPU (compute_phash), same as --gpu-decode all.
         * Results come back to this (main) thread, which alone does the DB writes, the commit every 4 videos, the
           failed-page and progress updates (_save_phash_result), same as the normal loop. The order can differ.
         * No CUDA device: everything is hashed by the CPU worker.

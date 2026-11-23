@@ -7,7 +7,7 @@ from unittest import mock
 from rich.text import Text
 
 from hydrusvideodeduplicator import dedup
-from hydrusvideodeduplicator.config import Config, normalize_gpu_decode_args
+from hydrusvideodeduplicator.config import Config, GpuDecodeArgError, normalize_gpu_decode_args
 from hydrusvideodeduplicator.vpdqpy import vpdqpy
 from hydrusvideodeduplicator.vpdqpy.vpdqpy import Vpdq
 
@@ -69,13 +69,13 @@ class TestGpuDecodeStatus(unittest.TestCase):
         self.assertEqual(self._status(cuda=True, nvdec=False, auto=True)[0], dedup.GPU_STATUS_NO_NVDEC)
 
     def test_on_and_no_device_unchanged(self):
-        self.assertEqual(self._status(cuda=True, nvdec=True), (dedup.GPU_STATUS_ON, "Using GPU decode (CUDA).\n\n"))
+        self.assertEqual(self._status(cuda=True, nvdec=True), (dedup.GPU_STATUS_ON, "Using GPU decode (all).\n\n"))
         self.assertEqual(
             self._status(cuda=True, nvdec=True, auto=True), (dedup.GPU_STATUS_ON, "Using GPU decode (auto).\n\n")
         )
         status, out = self._status(cuda=False, nvdec=False)
         self.assertEqual(status, dedup.GPU_STATUS_NO_DEVICE)
-        self.assertEqual(out, "WARNING: --gpu-decode: no CUDA device found, decoding on the CPU.\n\n")
+        self.assertEqual(out, "WARNING: --gpu-decode all: no CUDA device found, decoding on the CPU.\n\n")
 
     def test_plain_flag_turned_off_without_nvdec(self):
         for status, auto, expected in [
@@ -105,26 +105,17 @@ class TestCudaDevice(unittest.TestCase):
 
 class TestArgValues(unittest.TestCase):
     def test_on_off_values(self):
-        for value in ["on", "TRUE", "1", "yes"]:
-            self.assertEqual(
-                normalize_gpu_decode_args(["--gpu-decode", value]), ["--gpu-decode", "--no-gpu-decode-auto"]
-            )
-            self.assertEqual(
-                normalize_gpu_decode_args([f"--gpu-decode={value}"]), ["--gpu-decode", "--no-gpu-decode-auto"]
-            )
+        # Older spellings still work, undocumented: on/true/1/yes mean all, false/0/no mean off.
+        for value in ["all", "on", "TRUE", "1", "yes"]:
+            self.assertEqual(normalize_gpu_decode_args(["--gpu-decode", value]), ["--gpu-decode", "all"])
+            self.assertEqual(normalize_gpu_decode_args([f"--gpu-decode={value}"]), ["--gpu-decode", "all"])
         for value in ["off", "False", "0", "no"]:
-            self.assertEqual(
-                normalize_gpu_decode_args(["--gpu-decode", value]), ["--no-gpu-decode", "--no-gpu-decode-auto"]
-            )
-            self.assertEqual(
-                normalize_gpu_decode_args([f"--gpu-decode={value}"]), ["--no-gpu-decode", "--no-gpu-decode-auto"]
-            )
-        # Not a value: left alone (a following flag, or an unknown value that typer reports as before)
-        self.assertEqual(
-            normalize_gpu_decode_args(["--gpu-decode", "--verbose"]),
-            ["--gpu-decode", "--no-gpu-decode-auto", "--verbose"],
-        )
-        self.assertEqual(normalize_gpu_decode_args(["--gpu-decode=maybe"]), ["--gpu-decode=maybe"])
+            self.assertEqual(normalize_gpu_decode_args(["--gpu-decode", value]), ["--gpu-decode", "off"])
+            self.assertEqual(normalize_gpu_decode_args([f"--gpu-decode={value}"]), ["--gpu-decode", "off"])
+        # No value, or an unknown one: a clear error instead of a guess
+        for args in (["--gpu-decode", "--verbose"], ["--gpu-decode=maybe"]):
+            with self.assertRaises(GpuDecodeArgError, msg=args):
+                normalize_gpu_decode_args(args)
 
     def test_unknown_env_value(self):
         for value in ["enabled", "2", "Maybe"]:
@@ -132,7 +123,7 @@ class TestArgValues(unittest.TestCase):
             self.assertEqual(
                 (config.gpu_decode, config.gpu_decode_auto, config.gpu_decode_invalid), (False, False, value)
             )
-        for value in ["1", "true", "YES", "on", "0", "false", "no", "off", "", "Auto"]:
+        for value in ["all", "1", "true", "YES", "on", "0", "false", "no", "off", "", "Auto"]:
             self.assertIsNone(Config._load({"GPU_DECODE": value}).gpu_decode_invalid, value)
         self.assertIsNone(Config._load({}).gpu_decode_invalid)
 
