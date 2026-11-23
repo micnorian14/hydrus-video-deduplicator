@@ -141,12 +141,12 @@ Hydrus is, so your numbers will vary.
 | Step | Original 0.12.1 | This fork |
 |---|---|---|
 | Startup check for already-hashed files | several minutes on a large database | near-instant |
-| Perceptually hashing videos (`--gpu-decode auto`) | CPU decode | about 1.8× faster with a 6-core CPU, about 3× with a 4-thread CPU |
+| Perceptually hashing videos (`--gpu-decode auto`) | CPU decode | about 1.8× faster with a Ryzen 5600X CPU and RTX 5070 Ti |
 | Building search tree | 3.3–4.8 s per file | about 0.28 s per file (12–17× faster) |
 | Finding potential duplicates, tool's own search (3,000-file test copy) | 36 min 9 s | 3 min 41 s, about 10× faster |
-| Finding potential duplicates, live run (same query) | 7.66 s per file | 3.82 files per second, about 29× faster |
+| Finding potential duplicates, live run (same query) | 7.66 s per file | 3.82 files per second |
 
-These hashing numbers come from an RTX 5070 Ti with mixed real files. `--gpu-decode auto` uses the GPU and the CPU together, so how much it helps depends on your CPU. `--gpu-decode all` tries to send every video to the GPU. Auto was 1.5× faster than `all` on the 6-core CPU and 1.1× faster on the 4-thread CPU. `all` mostly helps with HEVC and 4K videos, and can be slower than the CPU for VP8, VP9 and MPEG-4.
+These hashing numbers come from an RTX 5070 Ti with mixed real files. On a slower CPU, limited to 4 threads, the gain was about 3×. `--gpu-decode auto` uses the GPU and the CPU together, so how much it helps depends on your CPU. `--gpu-decode all` tries to send every video to the GPU. Auto was 1.5× faster than `all` on the 5600X and 1.1× faster on the 4-thread CPU. `all` mostly helps with HEVC and 4K videos, and can be slower than the CPU for VP8, VP9 and MPEG-4.
 
 Some speedups have no flag and are always on, such as downloading the next file while the current one hashes. You can turn them off to compare against the original or to rule one out while troubleshooting.
 
