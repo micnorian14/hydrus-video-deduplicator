@@ -154,6 +154,10 @@ def main(
         Optional[bool],
         typer.Option(help="Send each pair to Hydrus once per run instead of twice (faster)."),
     ] = False,
+    dry_run: Annotated[
+        Optional[bool],
+        typer.Option(help="Don't send anything to Hydrus; write found pairs to a file in the dedupe database folder."),
+    ] = False,
     dedup_database_dir: Annotated[
         Optional[Path],
         typer.Option(
@@ -373,6 +377,7 @@ def main(
         gpu_decode=resolve_gpu_decode(gpu_decode),
         skip_repeat_pairs=bool(skip_repeat_pairs),
         reset_gpu_profile=bool(reset_gpu_profile),
+        dry_run=bool(dry_run),
     )
 
     if debug:

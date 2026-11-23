@@ -227,6 +227,7 @@ More on running the program is in [Usage](./docs/usage.md).
 | [`--gpu-decode auto`](#--gpu-decode) | You have an NVIDIA GPU. Recommended: hashing uses the GPU and the CPU together. `--gpu-decode all` tries to force all files to decode on the GPU. |
 | [`--reset-gpu-profile`](#--gpu-decode) | Once, to make `--gpu-decode auto` relearn your CPU and GPU speeds. |
 | [`--skip-repeat-pairs`](#--skip-repeat-pairs) | You want fewer Hydrus API calls while finding potential duplicates. |
+| [`--dry-run`](#--dry-run) | You want to see the pairs without sending them to Hydrus. |
 | [`--relink-search-tree`](#--relink-search-tree) | Once, if the program warns about search tree issues. |
 | [`--backup`](#--backup) | You want a copy of the dedupe database before each run changes it. |
 | [`--prune-deleted-files`](#--prune-deleted-files) | You delete videos in Hydrus and want them out of the dedupe database. |
@@ -297,6 +298,22 @@ python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --skip-repeat-pairs
 - Downloads, subscriptions and duplicate auto-resolution can keep running in Hydrus while it runs.
 - **Caveat:** don't clear or resync potential duplicates in Hydrus during the run. A pair that was already sent this
   run would not be sent again. See the warning above.
+
+### `--dry-run`
+
+Hashes videos and searches for duplicates as usual, but sends nothing to Hydrus. Pairs it finds are written to a
+timestamped file in the dedupe database folder, named like `dry_run_pairs-20261122-212500.jsonl`. You can open that
+file in Rakaan's HVD Media Reviewer with Open pair report.
+
+```sh
+python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --dry-run --dedup-database-dir="PATH_TO_A_COPY"
+```
+
+- Use a copy of your dedupe database with `--dedup-database-dir`. Hashing still updates that database as usual.
+- No potential duplicate pairs are sent to Hydrus, and failed files are not added to a Hydrus page.
+- The search cache is left unchanged, so a later real run still searches those files and can send the pairs to Hydrus.
+- You can also set the environment variable `HVD_DRY_RUN=1`. The GUI ignores command line flags, so use the environment
+  variable there.
 
 ### `--relink-search-tree`
 

@@ -48,9 +48,10 @@ class HydrusPageLogger:
     _log = logging.getLogger("HydrusPageLogger")
     _log.setLevel(logging.INFO)
 
-    def __init__(self, client: HVDClient, page_name: str):
+    def __init__(self, client: HVDClient, page_name: str, dry_run: bool = False):
         self.client = client
         self.page_name = page_name
+        self.dry_run = dry_run
         self.sent = 0
         self.page_missing = False
         self._page_key: str | None = None
@@ -72,7 +73,9 @@ class HydrusPageLogger:
         return self._page_key
 
     def add_failed_video(self, video_hash: str) -> None:
-        """Add a failed video to the Hydrus page. Does nothing if the page is missing."""
+        """Add a failed video to the Hydrus page. Does nothing if the page is missing or this is a dry run."""
+        if self.dry_run:
+            return
         page_key = self._page_key_or_none()
         if page_key is None:
             return

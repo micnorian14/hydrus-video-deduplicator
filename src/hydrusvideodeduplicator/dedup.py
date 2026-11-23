@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 import atexit
 import contextlib
 import gc
+import json
 import os
 import queue
 import sqlite3
@@ -29,7 +30,7 @@ import hydrusvideodeduplicator.hydrus_api as hydrus_api
 
 from .client import HVDClient
 from .db import DedupeDB, vptree
-from .dedup_util import console_print, memory_status, print_success, print_user, style_user_text
+from .dedup_util import console_print, display_path, memory_status, print_success, print_user, style_user_text
 from .config import GPU_DECODE_AUTO
 from .hashing import compute_phash, last_decode_used_gpu, probe_video_details, video_prefers_gpu_decode
 from . import gpu_profile
@@ -124,6 +125,11 @@ def pipeline_enabled() -> bool:
 def skip_repeat_pairs_enabled_by_env() -> bool:
     """Set the environment variable HVD_SKIP_REPEAT_PAIRS=1 to turn on --skip-repeat-pairs (off by default)."""
     return os.environ.get("HVD_SKIP_REPEAT_PAIRS", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def dry_run_enabled_by_env() -> bool:
+    """Set the environment variable HVD_DRY_RUN=1 to turn on --dry-run (off by default)."""
+    return os.environ.get("HVD_DRY_RUN", "0").strip().lower() in ("1", "true", "yes", "on")
 
 
 # Printed at the start of "Finding potential duplicates" when --skip-repeat-pairs is on. Display only.
@@ -351,6 +357,99 @@ def finished_duplicates_message(n: int) -> str:
     return f"Finished finding potential duplicates. {duplicates_result_message(n)}"
 
 
+def dry_run_startup_message(path: Path) -> str:
+    return f"Dry run: nothing will be sent to Hydrus. Found pairs go to {display_path(path)}."
+
+
+def dry_run_result_message(n: int, path: Path) -> str:
+    if n == 0:
+        return f"No potential duplicate pairs found. Results file: '{display_path(path)}'."
+    return f"{n} potential duplicate {_plural(n, 'pair')} written to '{display_path(path)}'."
+
+
+def dry_run_finished_message(n: int, path: Path) -> str:
+    return f"Finished finding potential duplicates. {dry_run_result_message(n, path)}"
+
+
+def new_dry_run_pairs_path(db_dir: Path) -> Path:
+    return Path(db_dir) / f"dry_run_pairs-{time.strftime('%Y%m%d-%H%M%S')}.jsonl"
+
+
+def similarity_from_search_distance(distance) -> float | None:
+    """Turn a search distance back into HVD's 0-100 similarity score. None if no distance was given."""
+    # Inverse of vptree.fix_vpdq_similarity: distance = (100 - int(similarity)) + 1
+    if distance is None:
+        return None
+    score = 101 - int(distance)
+    if score < 0:
+        return 0.0
+    if score > 100:
+        return 100.0
+    return float(score)
+
+
+class DryRunPairWriter:
+    """Write unique potential-duplicate pairs to a JSONL file. Never talks to Hydrus."""
+
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self._pairs: dict = {}
+        self._order: list = []
+        self._closed = False
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._flush()  # create an empty file so the printed path exists from the start
+
+    @property
+    def count(self) -> int:
+        return len(self._pairs)
+
+    def record(self, hash_a: str, hash_b: str, distance=None) -> None:
+        score = similarity_from_search_distance(distance)
+        key = (hash_a, hash_b) if hash_a <= hash_b else (hash_b, hash_a)
+        existing = self._pairs.get(key)
+        if existing is None:
+            # First time this pair is seen: both score fields get this score until the other direction arrives.
+            self._pairs[key] = {
+                "file_a": hash_a,
+                "file_b": hash_b,
+                "score_a_to_b": score,
+                "score_b_to_a": score,
+            }
+            self._order.append(key)
+        elif hash_a == existing["file_b"] and hash_b == existing["file_a"]:
+            existing["score_b_to_a"] = score
+        elif hash_a == existing["file_a"] and hash_b == existing["file_b"] and existing["score_a_to_b"] is None:
+            existing["score_a_to_b"] = score
+            if existing["score_b_to_a"] is None:
+                existing["score_b_to_a"] = score
+        self._flush()
+
+    def _flush(self) -> None:
+        tmp = self.path.with_name(self.path.name + ".tmp")
+        with tmp.open("w", encoding="utf-8", newline=chr(10)) as fh:
+            for key in self._order:
+                rec = self._pairs[key]
+                fh.write(
+                    json.dumps(
+                        {
+                            "file_a": rec["file_a"],
+                            "file_b": rec["file_b"],
+                            "score_a_to_b": rec["score_a_to_b"],
+                            "score_b_to_a": rec["score_b_to_a"],
+                        },
+                        ensure_ascii=False,
+                    )
+                    + chr(10)
+                )
+        tmp.replace(self.path)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._flush()
+        self._closed = True
+
+
 class RepeatPairSkipper:
     """
     Opt-in (--skip-repeat-pairs / HVD_SKIP_REPEAT_PAIRS=1): send each potential duplicate pair to Hydrus once per
@@ -545,6 +644,7 @@ class HydrusVideoDeduplicator:
     hydlog.setLevel(logging.INFO)
     _DEBUG = False
     skip_repeat_pairs = False  # see RepeatPairSkipper
+    dry_run = False  # --dry-run: write pairs to a file, send nothing to Hydrus
 
     def __init__(
         self,
@@ -559,6 +659,7 @@ class HydrusVideoDeduplicator:
         gpu_decode: bool | str = False,
         skip_repeat_pairs: bool = False,
         reset_gpu_profile: bool = False,
+        dry_run: bool = False,
     ):
         self.db = db
         # False: CPU decode. True: GPU decode (--gpu-decode all). GPU_DECODE_AUTO: --gpu-decode auto.
@@ -580,10 +681,13 @@ class HydrusVideoDeduplicator:
                 active=self.gpu_decode_auto and self.gpu_decode_available,
             )
         self.skip_repeat_pairs = skip_repeat_pairs
+        self.dry_run = bool(dry_run) or dry_run_enabled_by_env()
         self.client = client
         self.similarity_threshold = similarity_threshold
         self.job_count = job_count
-        self.page_logger = HydrusPageLogger(self.client, resolve_failed_page_name(failed_page_name))
+        self.page_logger = HydrusPageLogger(
+            self.client, resolve_failed_page_name(failed_page_name), dry_run=self.dry_run
+        )
         self.search_tags = self.get_search_tags(custom_query)
         self.update_progress_callback = update_progress_callback
         if self.update_progress_callback:
@@ -622,6 +726,24 @@ class HydrusVideoDeduplicator:
 
         Returns the number of similar pairs found during searching.
         """
+        num_similar_pairs = 0
+
+        if self.dry_run or dry_run_enabled_by_env():
+            self.dry_run = True
+            self._ensure_dry_run_writer()
+            print(f"[blue]{dry_run_startup_message(self.dry_run_pairs_path)}")
+            print()
+
+        try:
+            num_similar_pairs = self._deduplicate_body(skip_hashing=skip_hashing)
+        finally:
+            self._close_dry_run_writer()
+        return num_similar_pairs
+
+    def _deduplicate_body(
+        self,
+        skip_hashing: bool,
+    ) -> int:
         num_similar_pairs = 0
 
         if skip_hashing:
@@ -704,7 +826,9 @@ class HydrusVideoDeduplicator:
         # This is just to print info for the user.
         # Note: This will be inaccurate if the user searches for duplicates in the Hydrus client
         #       while this is running.
-        pre_dedupe_count = self.client.get_potential_duplicate_count_hydrus()
+        pre_dedupe_count = 0
+        if not self.dry_run:
+            pre_dedupe_count = self.client.get_potential_duplicate_count_hydrus()
 
         print_user("\nTip: You can skip finding potential duplicates at any time by pressing CTRL+C.\n")
         self.db.begin_transaction()
@@ -718,12 +842,19 @@ class HydrusVideoDeduplicator:
                 search_finished = True
 
         # Statistics for user
-        post_dedupe_count = self.client.get_potential_duplicate_count_hydrus()
-        new_dedupes_count = post_dedupe_count - pre_dedupe_count
-        if search_finished:
-            print_success(finished_duplicates_message(new_dedupes_count))
+        if self.dry_run:
+            path = self.dry_run_pairs_path
+            if search_finished:
+                print_success(dry_run_finished_message(num_similar_pairs, path))
+            else:
+                print_success(dry_run_result_message(num_similar_pairs, path))
         else:
-            print_success(duplicates_result_message(new_dedupes_count))
+            post_dedupe_count = self.client.get_potential_duplicate_count_hydrus()
+            new_dedupes_count = post_dedupe_count - pre_dedupe_count
+            if search_finished:
+                print_success(finished_duplicates_message(new_dedupes_count))
+            else:
+                print_success(duplicates_result_message(new_dedupes_count))
 
         self.hydlog.info(f"{num_similar_pairs} similar file pairs found.")
         self.hydlog.info("Deduplication done.")
@@ -1088,10 +1219,7 @@ class HydrusVideoDeduplicator:
                     except queue.Empty:
                         return
                     num_similar_pairs += len(pairs)
-                    self.db.execute(
-                        "UPDATE shape_search_cache SET searched_distance = ? WHERE hash_id = ?;",
-                        (search_threshold, hash_id),
-                    )
+                    self._update_search_cache(search_threshold, hash_id)
                     processed_count += 1
                     if processed_count % COMMIT_BATCH_SIZE == 0:
                         self.db.commit()
@@ -1158,8 +1286,39 @@ class HydrusVideoDeduplicator:
                 raise
         return num_similar_pairs // 2
 
-    def mark_videos_as_duplicates(self, video1_hash: str, video2_hash: str):
-        """Mark a pair of videos as duplicates in Hydrus."""
+    def _ensure_dry_run_writer(self) -> DryRunPairWriter:
+        writer = getattr(self, "dry_run_writer", None)
+        if writer is not None:
+            return writer
+        path = getattr(self, "dry_run_pairs_path", None)
+        if path is None:
+            db_dir = getattr(self.db, "db_dir", None) or DedupeDB.get_db_dir()
+            path = new_dry_run_pairs_path(db_dir)
+            self.dry_run_pairs_path = path
+        writer = DryRunPairWriter(path)
+        self.dry_run_writer = writer
+        return writer
+
+    def _close_dry_run_writer(self) -> None:
+        writer = getattr(self, "dry_run_writer", None)
+        if writer is not None:
+            writer.close()
+            self.dry_run_writer = None
+
+    def _update_search_cache(self, search_threshold, hash_id) -> None:
+        # Dry-run must not mark files as already searched, so a later real run still sends the pairs to Hydrus.
+        if self.dry_run:
+            return
+        self.db.execute(
+            "UPDATE shape_search_cache SET searched_distance = ? WHERE hash_id = ?;",
+            (search_threshold, hash_id),
+        )
+
+    def mark_videos_as_duplicates(self, video1_hash: str, video2_hash: str, distance=None):
+        """Mark a pair of videos as duplicates in Hydrus. In a dry run, write the pair to the results file instead."""
+        if self.dry_run:
+            self._ensure_dry_run_writer().record(video1_hash, video2_hash, distance)
+            return
         new_relationship = {
             "hash_a": video1_hash,
             "hash_b": video2_hash,
@@ -1246,8 +1405,14 @@ class HydrusVideoDeduplicator:
         """
         Find potential duplicates in the database and mark them as such in Hydrus.
 
+        In a dry run, pairs are written to a file and nothing is sent to Hydrus.
+        The search cache is left unchanged so a later real run still sends those pairs.
+
         Returns the number of similar file pairs found.
         """
+        if dry_run_enabled_by_env():
+            self.dry_run = True
+
         tree = vptree.VpTreeManager(self.db)
         search_threshold = vptree.fix_vpdq_similarity(self.similarity_threshold)
 
@@ -1281,7 +1446,7 @@ class HydrusVideoDeduplicator:
             # Skip the part of the tree walk every search takes identically (HVD_SCAN_SEARCH=0 disables).
             if tree.enable_fast_search_scan():
                 print("[blue]Using fast search scan.")
-        if len(files) > 0 and pipeline_enabled():
+        if len(files) > 0 and pipeline_enabled() and not self.dry_run:
             if not printed_using:
                 _section_gap()
                 printed_using = True
@@ -1289,7 +1454,13 @@ class HydrusVideoDeduplicator:
 
         send = self.mark_videos_as_duplicates
         skipper = None
-        if self.skip_repeat_pairs or skip_repeat_pairs_enabled_by_env():
+        if self.dry_run:
+            writer = self._ensure_dry_run_writer()
+
+            def send(file_hash_a, file_hash_b, distance=None, _writer=writer):  # noqa: F811
+                _writer.record(file_hash_a, file_hash_b, distance)
+
+        elif self.skip_repeat_pairs or skip_repeat_pairs_enabled_by_env():
             # Opt-in, see RepeatPairSkipper. With it off, `send` is exactly the original call.
             skipper = RepeatPairSkipper(send)
             send = skipper
@@ -1302,15 +1473,22 @@ class HydrusVideoDeduplicator:
 
         _section_gap()  # blank line before the progress bar when any of the sections above printed
         try:
-            if len(files) > 0 and pipeline_enabled():
+            if len(files) > 0 and pipeline_enabled() and not self.dry_run:
                 return self._find_potential_duplicates_pipelined(tree, files, search_threshold, send)
-            return self._find_potential_duplicates_serial(tree, files, search_threshold, send)
+            count = self._find_potential_duplicates_serial(tree, files, search_threshold, send)
+            if self.dry_run:
+                writer = getattr(self, "dry_run_writer", None)
+                if writer is not None:
+                    return writer.count
+            return count
         finally:
             if skipper is not None:
                 print(
                     f"[blue]Skipped {skipper.skipped} repeat pair sends "
                     "(each of those pairs had already been sent to Hydrus in this run)."
                 )
+            if self.dry_run:
+                self._close_dry_run_writer()
 
     def _find_potential_duplicates_serial(self, tree, files, search_threshold, send=None) -> int:
         """The original search loop: Hydrus calls one after another on this thread (used with HVD_PIPELINE=0)."""
@@ -1340,17 +1518,17 @@ class HydrusVideoDeduplicator:
                     file_hash_b = self.db.get_file_hash(similar_hash_id)
                     if hash_id != similar_hash_id:
                         self.hydlog.info(f'Similar files found: "{file_hash_a}" and "{file_hash_b}"')
-                        send(file_hash_a, file_hash_b)
+                        if self.dry_run:
+                            send(file_hash_a, file_hash_b, distance)
+                        else:
+                            send(file_hash_a, file_hash_b)
                         num_similar_pairs += 1
 
                 # TODO:
                 # Do we need to add the below line here? See _PerceptualHashesSearchForPotentialDuplicates in Hydrus.
                 # group_of_hash_ids = self._STL( self._Execute( 'SELECT hash_id FROM shape_search_cache WHERE searched_distance IS NULL or searched_distance < ?;', ( search_distance, ) ).fetchmany( 10 ) )   # noqa: E501
                 # Update the search cache
-                self.db.execute(
-                    "UPDATE shape_search_cache SET searched_distance = ? WHERE hash_id = ?;",
-                    (search_threshold, hash_id),
-                )
+                self._update_search_cache(search_threshold, hash_id)
 
                 processed_count += 1
                 # Commit periodically to save progress in case something fails.
