@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 import io
 import logging
+import math
 import os
 import sys
 import threading
@@ -43,6 +44,90 @@ def cuda_device() -> str | None:
     """GPU_DECODE_DEVICE: which NVIDIA GPU decodes (0 = the first). Unset or not a number: the default GPU."""
     value = os.environ.get("GPU_DECODE_DEVICE", "").strip()
     return value if value.isdigit() else None
+
+
+# The highest frame rate trusted from a fallback guess (see frames_per_hash). Real videos stay well below this.
+MAX_GUESSED_FPS = 240
+
+
+def _rate_value(rate) -> float:
+    """A stream rate as a float, or NaN if it's missing or unreadable (e.g. 0/0 in a WebM without a frame rate)."""
+    try:
+        return float(rate)
+    except (TypeError, ValueError, ZeroDivisionError, OverflowError):
+        return math.nan
+
+
+def _usable_guess(value: float) -> bool:
+    return math.isfinite(value) and 1 <= value <= MAX_GUESSED_FPS
+
+
+def _header_duration(container, stream) -> float | None:
+    """Duration in seconds from the container or stream header (None if the header doesn't say). Nothing is decoded."""
+    duration = None
+    if container.duration:
+        duration = container.duration / av.time_base
+    elif stream.duration and stream.time_base:
+        duration = float(stream.duration * stream.time_base)
+    return duration if duration and duration > 0 else None
+
+
+def measure_frame_rate(video_bytes: bytes) -> float:
+    """
+    Average frame rate of the first video stream, measured from its packet timestamps without decoding.
+    NaN if it can't be measured. Used only for videos whose header has no usable average_rate.
+    """
+    try:
+        with av.open(io.BytesIO(video_bytes)) as container:
+            stream = container.streams.video[0]
+            count, first, end, has_durations = 0, None, None, False
+            for packet in container.demux(stream):
+                if not packet.size or packet.pts is None:
+                    continue
+                count += 1
+                stop = packet.pts + (packet.duration or 0)
+                has_durations = has_durations or bool(packet.duration)
+                first = packet.pts if first is None else min(first, packet.pts)
+                end = stop if end is None else max(end, stop)
+            if count < 2 or not stream.time_base:
+                return math.nan
+            span = float((end - first) * stream.time_base)
+            if span <= 0:
+                return math.nan
+            return (count if has_durations else count - 1) / span
+    except Exception:
+        return math.nan
+
+
+def frames_per_hash(stream, duration: float | None = None, container=None, measured_rate=None) -> int:
+    """
+    Hash one of every N decoded frames, about one per second of video. Returns N.
+
+    A usable average_rate gives exactly the same N as before: round(rate) at 1 fps and above, and 1 (every frame)
+    below 1 fps, e.g. a slow GIF. Only when average_rate is missing or invalid (0, NaN, None, infinite), N comes
+    from the first usable estimate of: measured_rate (a number, or a function that measures it, see
+    measure_frame_rate), the header's frame count / duration, PyAV's guessed_rate, base_rate. N is 1 only if none
+    is usable. The duration is read from container if it isn't given.
+    Before this fix such files hashed every frame (old PyAV read the rate as 0) or failed to hash (newer PyAV).
+    """
+    if not stream.time_base:
+        return 1  # unchanged
+    average = _rate_value(stream.average_rate)
+    if math.isfinite(average) and average != 0:
+        return round(average) if average >= 1 else 1  # unchanged
+    # Header durations (GIFs) and guessed rates (variable frame rate WebMs, often 100) can be far off,
+    # so the rate measured from the timestamps comes first.
+    if duration is None and container is not None:
+        duration = _header_duration(container, stream)
+    estimates = [measured_rate, stream.frames / duration if stream.frames and duration else None]
+    estimates += [getattr(stream, name, None) for name in ("guessed_rate", "base_rate")]
+    for estimate in estimates:
+        value = _rate_value(estimate() if callable(estimate) else estimate)
+        if _usable_guess(value):
+            return round(value)
+        if 0 < value < 1:
+            return 1  # a real slow video: every frame
+    return 1
 
 
 # NVIDIA's video decoder library (NVDEC). CUDA can work without it, e.g. in Docker without the "video" capability.
@@ -134,16 +219,11 @@ class Vpdq:
                     return None
                 stream = container.streams.video[0]
                 codec_context = stream.codec_context
-                duration = None
-                if container.duration:
-                    duration = container.duration / av.time_base
-                elif stream.duration and stream.time_base:
-                    duration = float(stream.duration * stream.time_base)
                 return (
                     codec_context.name or "",
                     int(codec_context.width or 0),
                     int(codec_context.height or 0),
-                    duration if duration and duration > 0 else None,
+                    _header_duration(container, stream),
                 )
         except Exception:
             return None
@@ -181,12 +261,12 @@ class Vpdq:
             _decode_state.used_gpu = on_gpu
             checked_first_frame = not on_gpu
 
-            average_fps: int = 1
-            # Some videos, like small GIFs, will have a NoneType FPS
-            if not video.time_base or float(video.average_rate) < 1:
-                log.warning("Average FPS is None or less than 1. Every frame will be hashed.")
-            else:
-                average_fps = round(float(video.average_rate))
+            # Same for CPU and GPU decoding. Slow videos (below 1 fps, like some GIFs) hash every frame.
+            average_fps = frames_per_hash(
+                video, container=container, measured_rate=lambda: measure_frame_rate(video_bytes)
+            )
+            if average_fps == 1:
+                log.warning("Average FPS is missing or less than 1. Every frame will be hashed.")
 
             # The following is a very overly complex "for loop" in order to decode frames from the video.
             # Why not use a for loop? Because for some reason av>=12 will sometimes throw an

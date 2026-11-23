@@ -491,7 +491,20 @@ class DedupeDb:
             {normalize_file_hash(file_hash) for _, file_hash in gone_files}
             | {normalize_file_hash(file_hash) for file_hash in gone_queue}
         )
+        tree_nodes_removed, perceptual_hashes_removed = self._remove_files(gone_files, gone_queue)
+        return PruneResult(
+            videos=videos,
+            files=len(gone_files),
+            queued=len(gone_queue),
+            tree_nodes=tree_nodes_removed,
+            perceptual_hashes=perceptual_hashes_removed,
+        )
 
+    def _remove_files(self, gone_files: list, gone_queue: list) -> tuple[int, int]:
+        """
+        Remove files (hash_id, file_hash) and queue entries (file_hash) like prune_files_not_in(). Run it inside a
+        transaction. Returns (search tree nodes removed, perceptual hashes removed).
+        """
         self.execute("CREATE TEMP TABLE IF NOT EXISTS hvd_prune_hash_ids ( hash_id INTEGER PRIMARY KEY );")
         try:
             self.execute("DELETE FROM temp.hvd_prune_hash_ids;")
@@ -549,12 +562,71 @@ class DedupeDb:
                 "DELETE FROM shape_maintenance_branch_regen WHERE phash_id = ?;", [(p,) for p in orphan_phash_ids]
             )
 
+        return tree_nodes_removed, len(orphan_phash_ids)
+
+    def get_hashed_frame_counts(self, min_frames: int = 0) -> list[tuple[str, int]]:
+        """
+        (file hash, number of hashed frames) for every hashed video with at least min_frames hashed frames, including
+        the phashed file queue (--rehash-overhashed). Read only.
+        """
+        min_bytes = max(0, int(min_frames)) * 32  # each hashed frame is 32 bytes
+        rows = self.execute(
+            "SELECT f.file_hash, LENGTH(p.phash) / 32 FROM files f "
+            "JOIN shape_perceptual_hash_map m ON m.hash_id = f.hash_id "
+            "JOIN shape_perceptual_hashes p ON p.phash_id = m.phash_id "
+            "WHERE LENGTH(p.phash) >= :min_bytes "
+            "UNION ALL "
+            "SELECT file_hash, LENGTH(phash) / 32 FROM phashed_file_queue WHERE LENGTH(phash) >= :min_bytes;",
+            {"min_bytes": min_bytes},
+        ).fetchall()
+        counts: dict[str, int] = {}
+        for file_hash, frames in rows:
+            file_hash = normalize_file_hash(file_hash)
+            counts[file_hash] = max(frames, counts.get(file_hash, 0))
+        return list(counts.items())
+
+    def get_stored_phash(self, file_hash: str) -> bytes | None:
+        """The perceptual hash stored for a file (the queued one if it's waiting in the queue), or None. Read only."""
+        row = self.execute(
+            "SELECT phash FROM phashed_file_queue WHERE file_hash = :file_hash;", {"file_hash": file_hash}
+        ).fetchone()
+        if row is None:
+            row = self.execute(
+                "SELECT p.phash FROM files f "
+                "JOIN shape_perceptual_hash_map m ON m.hash_id = f.hash_id "
+                "JOIN shape_perceptual_hashes p ON p.phash_id = m.phash_id "
+                "WHERE f.file_hash = :file_hash;",
+                {"file_hash": file_hash},
+            ).fetchone()
+        return None if row is None else bytes(row[0])
+
+    def replace_perceptual_hashes(self, new_phashes: dict[str, bytes]) -> PruneResult:
+        """
+        Give files a new perceptual hash (--rehash-overhashed). Run it inside a transaction.
+
+        Each file is removed exactly like --prune-deleted-files removes a deleted video (its old perceptual hash
+        leaves the search tree if no other file uses it), then queued with its new perceptual hash, so the next
+        "Building search tree" step adds it back like a newly hashed video. Its search progress starts over.
+        """
+        wanted = {normalize_file_hash(file_hash): phash for file_hash, phash in new_phashes.items()}
+        if not wanted:
+            return PruneResult(videos=0, files=0, queued=0, tree_nodes=0, perceptual_hashes=0)
+        file_rows = self.execute("SELECT hash_id, file_hash FROM files;").fetchall()
+        gone_files = [
+            (hash_id, file_hash) for hash_id, file_hash in file_rows if normalize_file_hash(file_hash) in wanted
+        ]
+        del file_rows
+        # Queue entries are simply replaced below, so only the files table rows are removed here.
+        tree_nodes_removed, perceptual_hashes_removed = self._remove_files(gone_files, [])
+        stored_names = {normalize_file_hash(file_hash): file_hash for _, file_hash in gone_files}
+        for file_hash, phash in wanted.items():
+            self.add_to_phashed_files_queue(stored_names.get(file_hash, file_hash), phash)
         return PruneResult(
-            videos=videos,
+            videos=len(wanted),
             files=len(gone_files),
-            queued=len(gone_queue),
+            queued=len(wanted),
             tree_nodes=tree_nodes_removed,
-            perceptual_hashes=len(orphan_phash_ids),
+            perceptual_hashes=perceptual_hashes_removed,
         )
 
     def clear_search_cache(self):

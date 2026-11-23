@@ -33,6 +33,7 @@ from hydrusvideodeduplicator.db_tools import (
     run_prune_orphans,
 )
 from hydrusvideodeduplicator.dedup import HydrusVideoDeduplicator, print_search_cache_warning
+from hydrusvideodeduplicator.rehash import run_rehash_overhashed
 from hydrusvideodeduplicator.dedup_util import (
     TqdmLoggingHandler,
     console_print,
@@ -117,6 +118,12 @@ def main(
         Optional[bool],
         typer.Option(
             help="Remove broken entries (videos whose perceptual hash is missing) so they are re-hashed. Turns on --backup."  # noqa: E501
+        ),
+    ] = False,
+    rehash_overhashed: Annotated[
+        Optional[bool],
+        typer.Option(
+            help="Once: re-hash videos hashed with far too many frames (see README). Turns on --backup."
         ),
     ] = False,
     failed_page_name: Annotated[
@@ -252,8 +259,8 @@ def main(
 
     # Deduplication
 
-    if prune_deleted_files or prune_orphans or relink_search_tree:
-        backup = True  # pruning and relinking always back up first
+    if prune_deleted_files or prune_orphans or relink_search_tree or rehash_overhashed:
+        backup = True  # pruning, relinking and re-hashing always back up first
 
     if DedupeDB.does_db_exist():
         print_and_log(logger, f"Found existing database at: '{display_path(DedupeDB.get_db_file_path())}'")
@@ -310,6 +317,9 @@ def main(
 
         if prune_deleted_files:
             run_prune(db, hvdclient)
+
+        if rehash_overhashed:
+            run_rehash_overhashed(db, hvdclient, job_count)
 
         if clear_search_tree:
             db.begin_transaction()

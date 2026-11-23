@@ -108,7 +108,9 @@ the next file while the current one is hashed, an exact in-memory distance index
 [Speed optimizations](#speed-optimizations-this-fork).
 
 **Fixes.** `--relink-search-tree` repairs a damaged search tree in seconds ([issue #80](https://github.com/hydrusvideodeduplicator/hydrus-video-deduplicator/issues/80)). `--prune-orphans` removes videos whose perceptual hash is missing so they can be hashed again. Each run also prints two quick read-only checks for those problems. CTRL+C while
-building the search tree saves only fully added videos. Error and
+building the search tree saves only fully added videos. Videos with no usable frame rate in their header (some WebMs and GIFs)
+now hash about one frame per second instead of failing or hashing every frame; `--rehash-overhashed` fixes ones already
+hashed that way. Error and
 "broken branch" messages no longer break the progress bar. Full-width lines keep their line break in the Windows
 console.
 
@@ -229,6 +231,7 @@ More on running the program is in [Usage](./docs/usage.md).
 | [`--backup`](#--backup) | You want a copy of the dedupe database before each run changes it. |
 | [`--prune-deleted-files`](#--prune-deleted-files) | You delete videos in Hydrus and want them out of the dedupe database. |
 | [`--prune-orphans`](#--prune-orphans) | Once, if the program warns about broken entries. |
+| [`--rehash-overhashed`](#--rehash-overhashed) | Once, to fix videos that were hashed with far too many frames. |
 | [`--failed-page-name`](#--failed-page-name) | Optional. Defaults to `failed`. Use it only if you want a different page name. |
 
 ### `--gpu-decode`
@@ -323,7 +326,7 @@ python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --backup
 ```
 
 - The 3 newest backups are kept. Older files with that name pattern are deleted; no other files are touched. The program prints the backup path, and `Deleted the oldest backup:` with the path when an old backup is removed.
-- `--prune-deleted-files`, `--prune-orphans` and `--relink-search-tree` turn on `--backup`, so you don't need both.
+- `--prune-deleted-files`, `--prune-orphans`, `--relink-search-tree` and `--rehash-overhashed` turn on `--backup`, so you don't need both.
 - Each backup is the full size of the database, so 3 backups take about 3 times its size.
 - Nothing happens if there is no database yet.
 - To restore, close the program and copy a backup over `videohashes.sqlite`.
@@ -368,6 +371,29 @@ python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --prune-orphans
 - All or nothing: if it fails or you press CTRL+C, nothing is removed.
 - The database format does not change, so it still works with the original program.
 - You can combine it with other flags. It runs first, before `--prune-deleted-files` and `--relink-search-tree`.
+
+### `--rehash-overhashed`
+
+Some videos, mostly WebMs and some GIFs, have no usable frame rate in their header. Older versions hashed every frame
+of these instead of about one per second, so their hashes are huge. New videos are now hashed correctly. Run this once to fix the ones
+already in your database.
+
+```sh
+python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --rehash-overhashed
+```
+
+- It always makes a backup first (it turns on `--backup`, so you don't need both).
+- It asks Hydrus, read only, for the length of every video with 30 or more hashed frames. A video with more than 3
+  hashed frames per second of its length is downloaded and hashed again. Videos with fewer than 30 hashed frames are
+  never touched.
+- Each fixed video is added back to the search tree in the same run and searched for duplicates again.
+- A video that hashes the same as before, or fails to hash, keeps its old hash. Failed files are not sent to the
+  `failed` page.
+- It prints a summary like `Re-hashed 16 over-hashed videos (1887 hashed frames down to 137). They are added to the search tree in this run.`
+- All or nothing: if it fails or you press CTRL+C, nothing is changed.
+- **Remove it from your script after the first run.** Later runs only check the lengths again.
+- Every other video keeps exactly the same hash, and the database format does not change.
+- It runs at startup, after `--prune-deleted-files`. There is no GUI button for it.
 
 ### `--failed-page-name`
 
