@@ -38,6 +38,7 @@ from hydrusvideodeduplicator.dedup_util import TqdmLoggingHandler, display_path,
 from hydrusvideodeduplicator.db_tools import (
     backup_message,
     check_database,
+    print_queue_waiting,
     prune_message,
     run_backup,
     run_prune,
@@ -217,6 +218,7 @@ class Worker(QObject):
                     f"Database filesize: {db_stats.file_size} bytes.",
                 )
                 check_database(self.db, gui=True)
+                print_queue_waiting(self.db)
                 print_search_cache_warning()
             except Exception as exc:
                 print_and_log(self.logger, f"Database upgrade failed: {exc}")

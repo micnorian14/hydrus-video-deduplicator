@@ -3,7 +3,8 @@
 
 The profile is a small JSON file next to the dedupe database (gpu_profile.json), never inside it. Deleting it, or
 --reset-gpu-profile, only makes auto mode start again from its fixed rules (prefers_gpu_decode). Hashes are identical
-on the GPU and the CPU, so the profile only changes speed.
+for the codecs tested (H.264, HEVC, VP8, VP9). MPEG-4 and WMV3 can differ by a few bits but still score as a full
+match, so the profile only changes speed.
 
 Each hashed video is timed on the worker that hashed it and grouped by codec and resolution (a "kind"). Time is
 measured per second of video, so short and long videos of the same kind compare fairly. A kind's speed on a device is

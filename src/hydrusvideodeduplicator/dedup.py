@@ -243,7 +243,9 @@ AUTO_RAM_ALONE_FRACTION = 0.25
 AUTO_JOIN_S = 30.0
 AUTO_EXIT_JOIN_S = 10.0
 # --gpu-decode auto: when the GPU worker is idle, no video is waiting for it and the CPU worker is busy, the GPU worker
-# takes the oldest waiting CPU video (decoded on the GPU) instead of sitting idle. Hashes are identical either way.
+# takes the oldest waiting CPU video (decoded on the GPU) instead of sitting idle. Hashes are identical for the codecs
+# tested (H.264, HEVC, VP8, VP9). MPEG-4 and WMV3 can differ by a few bits but still score as a full match, so
+# duplicate detection isn't affected.
 # Only this direction: the GPU path barely uses the CPU, while a heavy GPU video (e.g. H.264 4K) on the CPU is
 # several times slower and was measured to make the whole run slower.
 AUTO_SHARE_WORK = True
@@ -833,8 +835,9 @@ class HydrusVideoDeduplicator:
           is low, see auto_ready_limit), and reads each video's codec and resolution from its header (no decoding) to
           pick GPU or CPU (prefers_gpu_decode).
         * Each worker takes the oldest waiting video meant for it. With AUTO_SHARE_WORK, an idle GPU worker also takes
-          the oldest waiting CPU video while the CPU worker is busy. Hashes are identical on the GPU and the CPU, so
-          this only changes speed. Fewer than 4 CPUs: see auto_worker_settings.
+          the oldest waiting CPU video while the CPU worker is busy. Hashes are identical for the codecs tested
+          (H.264, HEVC, VP8, VP9). MPEG-4 and WMV3 can differ by a few bits but still score as a full match, so
+          duplicate detection isn't affected and this only changes speed. Fewer than 4 CPUs: see auto_worker_settings.
         * A video that fails on the GPU is retried on the CPU (compute_phash), same as plain --gpu-decode.
         * Results come back to this (main) thread, which alone does the DB writes, the commit every 4 videos, the
           failed-page and progress updates (_save_phash_result), same as the normal loop. The order can differ.

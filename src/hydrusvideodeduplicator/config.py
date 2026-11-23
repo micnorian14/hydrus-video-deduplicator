@@ -160,7 +160,9 @@ class Config:
 
         config.hvd_gui = config_map.get("HVD_GUI", False)
 
-        # Use the NVIDIA GPU (CUDA/NVDEC) to decode videos. Hashes are identical to CPU decoding.
+        # Use the NVIDIA GPU (CUDA/NVDEC) to decode videos. Hashes are identical for the codecs tested
+        # (H.264, HEVC, VP8, VP9). MPEG-4 and WMV3 can differ by a few bits but still score as a full
+        # match, so duplicate detection isn't affected.
         gpu_decode_setting = str(config_map.get("GPU_DECODE", "0")).strip().lower()
         config.gpu_decode = gpu_decode_setting in GPU_DECODE_ON_VALUES
         # GPU_DECODE=auto: decode each video on the GPU or the CPU, whichever is usually faster for it.

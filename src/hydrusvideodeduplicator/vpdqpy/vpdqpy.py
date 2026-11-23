@@ -152,8 +152,9 @@ class Vpdq:
     def frame_extract_pyav(video_bytes: bytes, gpu_decode: bool = False) -> Iterator[av.VideoFrame]:
         """Extract frames from video
 
-        If gpu_decode is True, decoding uses the NVIDIA hardware decoder (CUDA/NVDEC). Decoded frames are
-        identical to CPU decoding, so the resulting perceptual hashes are identical too.
+        If gpu_decode is True, decoding uses the NVIDIA hardware decoder (CUDA/NVDEC). Hashes are
+        identical for the codecs tested (H.264, HEVC, VP8, VP9). MPEG-4 and WMV3 can differ by a few
+        bits but still score as a full match, so duplicate detection isn't affected.
         """
         open_kwargs = {}
         if gpu_decode:

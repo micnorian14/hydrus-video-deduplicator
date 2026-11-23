@@ -230,8 +230,10 @@ More on running the program is in [Usage](./docs/usage.md).
 ### `--gpu-decode`
 
 Decodes videos on an NVIDIA GPU (CUDA/NVDEC) while perceptually hashing, instead of on the CPU. Decoded frames stay
-in GPU memory and only the frames that get hashed are copied back. The hashes are identical to CPU decoding. If a
-video can't be decoded on the GPU, a warning is logged and that video is hashed on the CPU.
+in GPU memory and only the frames that get hashed are copied back. The hashes are identical for the codecs tested
+(H.264, HEVC, VP8, VP9). MPEG-4 and WMV3 can differ by a few bits but still score as a full match, so duplicate
+detection isn't affected. If a video can't be decoded on the GPU, a warning is logged and that video is hashed on
+the CPU.
 
 ```sh
 python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --gpu-decode
@@ -240,8 +242,10 @@ python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --gpu-decode
 `--gpu-decode auto` uses the GPU and the CPU at the same time, on different videos, and learns which one is faster on
 your computer for each kind of video. It starts with these rules: HEVC (except very small videos) and H.264 at about
 1440p and above go to the GPU, the rest to the CPU. When the GPU has nothing to do, it also takes CPU videos. Once auto
-mode has learned your speeds, an idle CPU also takes GPU videos it hashes nearly as fast. The hashes are the same either way, and at the end it prints
-how many videos went to each. If you have an NVIDIA GPU, this is the one to use. Without one, it just uses the CPU.
+mode has learned your speeds, an idle CPU also takes GPU videos it hashes nearly as fast. The hashes are identical
+for the codecs tested (H.264, HEVC, VP8, VP9). MPEG-4 and WMV3 can differ by a few bits but still score as a full
+match, so duplicate detection isn't affected. At the end it prints how many videos went to each. If you have an
+NVIDIA GPU, this is the one to use. Without one, it just uses the CPU.
 
 ```sh
 python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --gpu-decode auto
