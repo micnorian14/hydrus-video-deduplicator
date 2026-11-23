@@ -12,7 +12,7 @@ This is a fork of [Hydrus Video Deduplicator](https://github.com/hydrusvideodedu
 - New features are off unless you turn them on. The one exception: failed files go to a Hydrus page named `failed`, if you've made one.
 - The database format is unchanged, so a database used by this fork still works with the original program.
 
-It also adds `--relink-search-tree` to repair a damaged search tree, as reported in [issue #80](https://github.com/hydrusvideodeduplicator/hydrus-video-deduplicator/issues/80), and `--prune-orphans` to remove videos whose perceptual hash is missing.
+It also adds `--relink-search-tree` to repair a damaged search tree, as reported in [issue #80](https://github.com/hydrusvideodeduplicator/hydrus-video-deduplicator/issues/80), and `--prune-orphans` to remove videos whose perceptual hash is missing, and `--dry-run` to see the pairs without sending anything to Hydrus.
 
 This fork was vibe-coded with AI assistance and tested on a Hydrus library of about 3.5M files, with about 410k
 videos perceptually hashed.
@@ -107,7 +107,7 @@ program, without these changes. To use this fork, follow [Quick start](#quick-st
 **Speed.** GPU video decoding with `--gpu-decode auto` (recommended; learns your own CPU and GPU speeds) or `--gpu-decode all`, a faster check for already-hashed files at startup, downloading
 the next file while the current one is hashed, an exact in-memory distance index and a shorter tree walk for
 "Finding potential duplicates", faster search tree building, and Hydrus calls that run alongside the search. See
-[Speed optimizations](#speed-optimizations-this-fork).
+[Speed optimizations](#speed-optimizations).
 
 **Fixes.** `--relink-search-tree` repairs a damaged search tree in seconds ([issue #80](https://github.com/hydrusvideodeduplicator/hydrus-video-deduplicator/issues/80)). `--prune-orphans` removes videos whose perceptual hash is missing so they can be hashed again. Each run also prints two quick read-only checks for those problems. CTRL+C while
 building the search tree saves only fully added videos. Videos with no usable frame rate in their header (some WebMs and GIFs)
@@ -133,7 +133,7 @@ A full run in the Windows console:
 **GUI.** New **Back Up Database** and **Prune Deleted Files** buttons. GPU decode can be turned on with the
 `GPU_DECODE=auto` or `GPU_DECODE=all` environment variable.
 
-## Speed optimizations (this fork)
+## Speed optimizations
 
 These were measured on one library of about 410k videos. Speeds depend on your hardware, your files and how busy
 Hydrus is, so your numbers will vary.
@@ -141,13 +141,12 @@ Hydrus is, so your numbers will vary.
 | Step | Original 0.12.1 | This fork |
 |---|---|---|
 | Startup check for already-hashed files | several minutes on a large database | near-instant |
-| Perceptually hashing videos (`--gpu-decode all`, RTX 5070 Ti) | CPU decode | up to about 2× faster on HEVC and 4K; little or no gain on H.264 at 1080p and below |
-| Perceptually hashing videos (`--gpu-decode auto`, RTX 5070 Ti, mixed real files) | CPU decode | about 1.8× faster with a 12-thread CPU, about 3× with 4 cores |
+| Perceptually hashing videos (`--gpu-decode auto`) | CPU decode | about 1.8× faster with a 12-thread CPU, about 3× with 4 cores |
 | Building search tree | 3.3–4.8 s per file | about 0.28 s per file (12–17× faster) |
 | Finding potential duplicates, tool's own search (3,000-file test copy) | 36 min 9 s | 3 min 41 s, about 10× faster |
 | Finding potential duplicates, live run (same query) | 7.66 s per file | 3.82 files per second, about 29× faster |
 
-How much `--gpu-decode all` helps depends on your CPU and your files. On a 12-thread CPU with real files, HEVC and 4K videos hashed about 1.4× faster, and H.264 at 1080p and below was about the same speed. With the CPU limited to 4 cores, the same files were 2–4× faster. VP8, VP9 and MPEG-4 can be slower on the GPU. `--gpu-decode auto` uses both at once and beat either one alone on the same files: 1.5× faster than `--gpu-decode all` with 12 threads, 1.1× with 4 cores.
+These hashing numbers come from an RTX 5070 Ti with mixed real files. `--gpu-decode auto` uses the GPU and the CPU together, so how much it helps depends on your CPU. `--gpu-decode all` sends every video to the GPU instead. Auto was 1.5× faster than `all` with 12 threads and 1.1× faster with 4 cores. With `all`, HEVC and 4K videos hashed about 1.4× faster than CPU only on 12 threads, and H.264 at 1080p and below was about the same speed. VP8, VP9 and MPEG-4 can be slower on the GPU.
 
 Downloading the next file while the current one hashes,
 and overlapping the Hydrus calls with the search, save more time on top of that.
@@ -307,10 +306,10 @@ Hashes videos and searches for duplicates as usual, but sends nothing to Hydrus.
 timestamped file in the dedupe database folder, named like `dry_run_pairs-20261122-212500.jsonl`.
 
 ```sh
-python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --dry-run --dedup-database-dir="PATH_TO_A_COPY"
+python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --dry-run
 ```
 
-- Use a copy of your dedupe database with `--dedup-database-dir`. Hashing still updates that database as usual.
+- Safe to run on your real dedupe database. Hashing still saves new hashes as usual, which a later real run reuses.
 - No potential duplicate pairs are sent to Hydrus, and failed files are not added to a Hydrus page.
 - The search cache is left unchanged, so a later real run still searches those files and can send the pairs to Hydrus.
 - You can also set the environment variable `HVD_DRY_RUN=1`. The GUI ignores command line flags, so use the environment
