@@ -84,7 +84,7 @@ If you see `WARNING: GPU decode is off: your NVIDIA driver is missing video deco
 - Docker: `NVIDIA_DRIVER_CAPABILITIES` must include `video`, for example `compute,utility,video`.
 - WSL: update the NVIDIA driver on Windows (not inside WSL).
 
-With more than one NVIDIA GPU, see `GPU_DECODE_DEVICE` in [`--gpu-decode`](#--gpu-decode).
+With more than one NVIDIA GPU, see `GPU_DECODE_DEVICE` in [`--gpu-decode`](#gpu-decoding---gpu-decode-auto-or---gpu-decode-all).
 
 **Can't connect to Hydrus**
 
@@ -141,18 +141,14 @@ Hydrus is, so your numbers will vary.
 | Step | Original 0.12.1 | This fork |
 |---|---|---|
 | Startup check for already-hashed files | several minutes on a large database | near-instant |
-| Perceptually hashing videos (`--gpu-decode auto`) | CPU decode | about 1.8× faster with a 12-thread CPU, about 3× with 4 cores |
+| Perceptually hashing videos (`--gpu-decode auto`) | CPU decode | about 1.8× faster with a 6-core CPU, about 3× with a 4-thread CPU |
 | Building search tree | 3.3–4.8 s per file | about 0.28 s per file (12–17× faster) |
 | Finding potential duplicates, tool's own search (3,000-file test copy) | 36 min 9 s | 3 min 41 s, about 10× faster |
 | Finding potential duplicates, live run (same query) | 7.66 s per file | 3.82 files per second, about 29× faster |
 
-These hashing numbers come from an RTX 5070 Ti with mixed real files. `--gpu-decode auto` uses the GPU and the CPU together, so how much it helps depends on your CPU. `--gpu-decode all` sends every video to the GPU instead. Auto was 1.5× faster than `all` with 12 threads and 1.1× faster with 4 cores. With `all`, HEVC and 4K videos hashed about 1.4× faster than CPU only on 12 threads, and H.264 at 1080p and below was about the same speed. VP8, VP9 and MPEG-4 can be slower on the GPU.
+These hashing numbers come from an RTX 5070 Ti with mixed real files. `--gpu-decode auto` uses the GPU and the CPU together, so how much it helps depends on your CPU. `--gpu-decode all` tries to send every video to the GPU. Auto was 1.5× faster than `all` on the 6-core CPU and 1.1× faster on the 4-thread CPU. `all` mostly helps with HEVC and 4K videos, and can be slower than the CPU for VP8, VP9 and MPEG-4.
 
-Downloading the next file while the current one hashes,
-and overlapping the Hydrus calls with the search, save more time on top of that.
-
-These are on by default. You can disable them if you want to compare against the original
-or rule one out while troubleshooting.
+Some speedups have no flag and are always on, such as downloading the next file while the current one hashes. You can turn them off to compare against the original or to rule one out while troubleshooting.
 
 Set environment variables before running: in a `.bat` file add a line like `set HVD_PIPELINE=0` before the command,
 or in a Linux/macOS shell run `HVD_PIPELINE=0 python -m hydrusvideodeduplicator ...`.
@@ -180,7 +176,7 @@ database filesize line:
 
 ## Startup checks
 
-Every run prints two quick, read-only checks (about 0.7 seconds on 400k videos). They never change the database.
+Every run prints two quick read-only checks (about 0.7 seconds on 400k videos). These are only alerts to inform you.
 
 If everything is fine:
 
@@ -192,7 +188,9 @@ Search tree: 393057 perceptual hashes, no search tree issues found.
 If videos are missing their perceptual hash:
 
 ```
-WARNING: Checked 407984 videos: 91 videos are missing their perceptual hash. Run once with --prune-orphans to remove them. Your database is backed up automatically.
+WARNING: Checked 407984 videos: 91 videos are missing their perceptual hash.
+Run once with --prune-orphans to remove them.
+Your database is backed up automatically.
 ```
 
 If the search tree is damaged, the warning lists only the kinds of issues that were found, for example:
@@ -204,7 +202,9 @@ WARNING: Search tree: 393057 perceptual hashes, issues found:
   - 3 top nodes found (should be 1)
   - 4 parent links don't match
   - 12 hashes are missing from the tree
-Run once with --relink-search-tree to repair it. Your database is backed up automatically. The next duplicate search will start over.
+Run once with --relink-search-tree to repair it.
+Your database is backed up automatically.
+The next duplicate search will start over.
 ```
 
 The search tree check looks for the kind of damage from [issue #80](https://github.com/hydrusvideodeduplicator/hydrus-video-deduplicator/issues/80). It does not flag a half-built tree, files still waiting to be hashed, or the tree shape left by `--relink-search-tree`.
@@ -219,27 +219,43 @@ This is normal. Those videos are already hashed and saved, and the next run adds
 
 ## New flags
 
-The flags below are off by default, except that failed files go to a Hydrus page named `failed` if that page exists. Add the flags you want to the command you already use, for example
+The flags below are off by default. Failed files now automatically go to a Hydrus page named `failed` if that page exists. The legacy `--failed-page-name` flag is still there if you want a custom page name. Add the flags you want to the command you already use, for example
 `python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --skip-repeat-pairs --prune-deleted-files`.
 More on running the program is in [Usage](./docs/usage.md).
 
 | Flag | Use it when |
 |---|---|
-| [`--gpu-decode auto`](#--gpu-decode) | You have an NVIDIA GPU. Recommended: hashing uses the GPU and the CPU together. `--gpu-decode all` tries to force all files to decode on the GPU. |
-| [`--reset-gpu-profile`](#--gpu-decode) | Once, to make `--gpu-decode auto` relearn your CPU and GPU speeds. |
+| [`--backup`](#--backup) | You want a copy of the dedupe database before each run changes it. |
+| [`--gpu-decode auto`](#gpu-decoding---gpu-decode-auto-or---gpu-decode-all) | You have an NVIDIA GPU. Recommended: hashing uses the GPU and the CPU together. `--gpu-decode all` tries to force all files to decode on the GPU. |
+| [`--reset-gpu-profile`](#gpu-decoding---gpu-decode-auto-or---gpu-decode-all) | Once, to make `--gpu-decode auto` relearn your CPU and GPU speeds. |
 | [`--skip-repeat-pairs`](#--skip-repeat-pairs) | You want fewer Hydrus API calls while finding potential duplicates. |
 | [`--dry-run`](#--dry-run) | You want to see the pairs without sending them to Hydrus. |
 | [`--relink-search-tree`](#--relink-search-tree) | Once, if the program warns about search tree issues. |
-| [`--backup`](#--backup) | You want a copy of the dedupe database before each run changes it. |
 | [`--prune-deleted-files`](#--prune-deleted-files) | You delete videos in Hydrus and want them out of the dedupe database. |
 | [`--prune-orphans`](#--prune-orphans) | Once, if the program warns about broken entries. |
 | [`--rehash-overhashed`](#--rehash-overhashed) | Once, to fix videos that were hashed with far too many frames. |
-| [`--failed-page-name`](#--failed-page-name) | Optional. Defaults to `failed`. Use it only if you want a different page name. |
+| [`--failed-page-name`](#--failed-page-name) | Optional. Sets a custom page name. |
 
-### `--gpu-decode`
+### `--backup`
 
-Decodes videos on an NVIDIA GPU (CUDA/NVDEC) while perceptually hashing. It takes a value: `auto` (recommended),
-`all` or `off`. `--gpu-decode` on its own gives an error.
+Copies the dedupe database before the run changes it (before any database upgrade), into the same folder as the
+database, named `videohashes.backup-YYYYMMDD-HHMMSS.sqlite`. The copy is made with SQLite's own backup method, so it
+is consistent.
+
+```sh
+python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --backup
+```
+
+- The 3 newest backups are kept. Older files with that name pattern are deleted; no other files are touched. The program prints the backup path, and `Deleted the oldest backup:` with the path when an old backup is removed.
+- `--prune-deleted-files`, `--prune-orphans`, `--relink-search-tree` and `--rehash-overhashed` turn on `--backup`, so you don't need both.
+- Each backup is the full size of the database, so 3 backups take about 3 times its size.
+- Nothing happens if there is no database yet.
+- To restore, close the program and copy a backup over `videohashes.sqlite`.
+- In the GUI this is the **Back Up Database** button.
+
+### GPU decoding: `--gpu-decode auto` or `--gpu-decode all`
+
+These flags decode videos on an NVIDIA GPU (CUDA/NVDEC) during the perceptual hashing phase. Use `auto` (recommended) or `all`.
 
 `--gpu-decode auto` is the one to use if you have an NVIDIA GPU. It uses the GPU and the CPU at the same time, on
 different videos, and learns which one is faster on your computer for each kind of video. It starts with these rules:
@@ -331,23 +347,6 @@ python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --relink-search-tree
   restart would start the search from zero instead of resuming.
 - Can't be combined with `--clear-search-tree`.
 - Broken entries are skipped and reported; nothing is deleted. To remove them, use [`--prune-orphans`](#--prune-orphans).
-
-### `--backup`
-
-Copies the dedupe database before the run changes it (before any database upgrade), into the same folder as the
-database, named `videohashes.backup-YYYYMMDD-HHMMSS.sqlite`. The copy is made with SQLite's own backup method, so it
-is consistent.
-
-```sh
-python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --backup
-```
-
-- The 3 newest backups are kept. Older files with that name pattern are deleted; no other files are touched. The program prints the backup path, and `Deleted the oldest backup:` with the path when an old backup is removed.
-- `--prune-deleted-files`, `--prune-orphans`, `--relink-search-tree` and `--rehash-overhashed` turn on `--backup`, so you don't need both.
-- Each backup is the full size of the database, so 3 backups take about 3 times its size.
-- Nothing happens if there is no database yet.
-- To restore, close the program and copy a backup over `videohashes.sqlite`.
-- In the GUI this is the **Back Up Database** button.
 
 ### `--prune-deleted-files`
 
