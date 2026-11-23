@@ -141,7 +141,7 @@ Hydrus is, so your numbers will vary.
 | Step | Original 0.12.1 | This fork |
 |---|---|---|
 | Startup check for already-hashed files | several minutes on a large database | near-instant |
-| Perceptually hashing videos (`--gpu-decode auto`) | CPU decode | about 1.8× faster with a Ryzen 5600X CPU and RTX 5070 Ti |
+| Perceptually hashing videos (`--gpu-decode auto`) | CPU decode | about 1.8× faster when paired with an RTX 5070 Ti |
 | Building search tree | 3.3–4.8 s per file | about 0.28 s per file (12–17× faster) |
 | Finding potential duplicates, tool's own search (3,000-file test copy) | 36 min 9 s | 3 min 41 s, about 10× faster |
 | Finding potential duplicates, live run (same query) | 7.66 s per file | 3.82 files per second |
