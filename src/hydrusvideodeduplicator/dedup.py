@@ -389,19 +389,39 @@ def similarity_from_search_distance(distance) -> float | None:
 
 
 class DryRunPairWriter:
-    """Write unique potential-duplicate pairs to a JSONL file. Never talks to Hydrus."""
+    """Write unique potential-duplicate pairs to a JSONL file. Never talks to Hydrus.
+
+    Each new pair is appended as soon as it is found, so a stopped run keeps what it found.
+    The file is rewritten once at the end to fill in scores from the reverse direction.
+    """
 
     def __init__(self, path: Path):
         self.path = Path(path)
         self._pairs: dict = {}
         self._order: list = []
         self._closed = False
+        self._dirty = False  # a score changed after its line was written
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._flush()  # create an empty file so the printed path exists from the start
+        self.path.write_text("", encoding="utf-8")  # create an empty file so the printed path exists from the start
 
     @property
     def count(self) -> int:
         return len(self._pairs)
+
+    @staticmethod
+    def _line(rec: dict) -> str:
+        return (
+            json.dumps(
+                {
+                    "file_a": rec["file_a"],
+                    "file_b": rec["file_b"],
+                    "score_a_to_b": rec["score_a_to_b"],
+                    "score_b_to_a": rec["score_b_to_a"],
+                },
+                ensure_ascii=False,
+            )
+            + chr(10)
+        )
 
     def record(self, hash_a: str, hash_b: str, distance=None) -> None:
         score = similarity_from_search_distance(distance)
@@ -409,44 +429,38 @@ class DryRunPairWriter:
         existing = self._pairs.get(key)
         if existing is None:
             # First time this pair is seen: both score fields get this score until the other direction arrives.
-            self._pairs[key] = {
+            rec = {
                 "file_a": hash_a,
                 "file_b": hash_b,
                 "score_a_to_b": score,
                 "score_b_to_a": score,
             }
+            self._pairs[key] = rec
             self._order.append(key)
+            with self.path.open("a", encoding="utf-8", newline=chr(10)) as fh:
+                fh.write(self._line(rec))
         elif hash_a == existing["file_b"] and hash_b == existing["file_a"]:
-            existing["score_b_to_a"] = score
+            if existing["score_b_to_a"] != score:
+                existing["score_b_to_a"] = score
+                self._dirty = True
         elif hash_a == existing["file_a"] and hash_b == existing["file_b"] and existing["score_a_to_b"] is None:
             existing["score_a_to_b"] = score
             if existing["score_b_to_a"] is None:
                 existing["score_b_to_a"] = score
-        self._flush()
+            self._dirty = True
 
-    def _flush(self) -> None:
+    def _rewrite(self) -> None:
         tmp = self.path.with_name(self.path.name + ".tmp")
         with tmp.open("w", encoding="utf-8", newline=chr(10)) as fh:
             for key in self._order:
-                rec = self._pairs[key]
-                fh.write(
-                    json.dumps(
-                        {
-                            "file_a": rec["file_a"],
-                            "file_b": rec["file_b"],
-                            "score_a_to_b": rec["score_a_to_b"],
-                            "score_b_to_a": rec["score_b_to_a"],
-                        },
-                        ensure_ascii=False,
-                    )
-                    + chr(10)
-                )
+                fh.write(self._line(self._pairs[key]))
         tmp.replace(self.path)
 
     def close(self) -> None:
         if self._closed:
             return
-        self._flush()
+        if self._dirty:
+            self._rewrite()
         self._closed = True
 
 
