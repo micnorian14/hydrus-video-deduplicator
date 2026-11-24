@@ -353,7 +353,7 @@ def main(
             print("[green] Cleared the search tree.")
 
         if relink_search_tree:
-            print("[blue] Relinking the search tree. This only takes a moment...")
+            print("[bright_blue] Relinking the search tree. This only takes a moment...")
             db.begin_transaction()
             with db.conn:  # all-or-nothing: if anything fails or is interrupted, the DB is left unchanged
                 relink = db.relink_search_tree()
@@ -417,7 +417,7 @@ def main(
 
 
 def run_main(gui: bool, is_executable: bool):
-    print(f"[blue]Hydrus Video Deduplicator {__version__} (optimizations fork) [/]\n")
+    print(f"[bright_blue]Hydrus Video Deduplicator {__version__} (optimizations fork) [/]\n")
     if loaded_dotenv:
         # Note: This doesn't mean any values were actually loaded from the .env file.
         print(f"Config file found: '{display_path(find_dotenv())}'")

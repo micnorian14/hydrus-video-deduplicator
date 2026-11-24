@@ -70,7 +70,7 @@ def run_prune(db: DedupeDB.DedupeDb, client: HVDClient) -> DedupeDB.PruneResult 
     Asks Hydrus once for every video it has (read only). If that fails or returns no videos, nothing is pruned.
     All-or-nothing: on an error or CTRL+C the database is left unchanged. Returns None if nothing was pruned.
     """
-    print("[blue]Checking Hydrus for deleted videos...")
+    print("[bright_blue]Checking Hydrus for deleted videos...")
     try:
         existing = client.get_all_video_hashes_in_hydrus()
     except Exception as exc:

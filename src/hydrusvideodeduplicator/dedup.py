@@ -179,7 +179,7 @@ def print_gpu_decode_status(auto: bool = False) -> str:
     except Exception:
         status = GPU_STATUS_NO_DEVICE
     if status == GPU_STATUS_ON:
-        print(f"[blue]{GPU_DECODE_AUTO_ON if auto else GPU_DECODE_ON}")
+        print(f"[bright_blue]{GPU_DECODE_AUTO_ON if auto else GPU_DECODE_ON}")
     elif status == GPU_STATUS_NO_NVDEC:
         console_print(style_user_text(GPU_DECODE_NO_NVDEC), highlight=False)
     else:
@@ -207,7 +207,7 @@ def setup_gpu_profile(db_dir, job_count: int, reset: bool, active: bool) -> GpuP
         if not active:
             if reset:
                 gpu_profile.remove_profile(path)
-                print(f"[blue]{GPU_PROFILE_RESET}")
+                print(f"[bright_blue]{GPU_PROFILE_RESET}")
                 print()
             return None
         profile, status = GpuProfile.load(path, gpu_profile.hardware_fingerprint(job_count), reset=reset)
@@ -217,10 +217,10 @@ def setup_gpu_profile(db_dir, job_count: int, reset: bool, active: bool) -> GpuP
         console_print(style_user_text(GPU_PROFILE_CORRUPT), highlight=False)
         print()
     elif status == gpu_profile.RESET:
-        print(f"[blue]{GPU_PROFILE_RESET}")
+        print(f"[bright_blue]{GPU_PROFILE_RESET}")
         print()
     elif status == gpu_profile.HARDWARE_CHANGED:
-        print(f"[blue]{GPU_PROFILE_NEW_HARDWARE}")
+        print(f"[bright_blue]{GPU_PROFILE_NEW_HARDWARE}")
         print()
     return profile
 
@@ -861,7 +861,7 @@ class HydrusVideoDeduplicator:
             custom_query = [x for x in custom_query if x.strip()]
             if len(custom_query) > 0:
                 search_tags.extend(custom_query)
-                print(f"[blue]Custom Query: {custom_query}")
+                print(f"[bright_blue]Custom Query: {custom_query}")
                 print()
         return search_tags
 
@@ -885,7 +885,7 @@ class HydrusVideoDeduplicator:
         if self.dry_run or dry_run_enabled_by_env():
             self.dry_run = True
             self._ensure_dry_run_writer()
-            print(f"[blue]{dry_run_startup_message(self.dry_run_pairs_path)}")
+            print(f"[bright_blue]{dry_run_startup_message(self.dry_run_pairs_path)}")
             print()
 
         try:
@@ -901,7 +901,7 @@ class HydrusVideoDeduplicator:
         num_similar_pairs = 0
 
         if skip_hashing:
-            print("[blue]Skipping perceptual hashing")
+            print("[bright_blue]Skipping perceptual hashing")
         else:
             video_hashes = list(self.client.get_video_hashes(self.search_tags))
             video_hashes = self.filter_unhashed(video_hashes)
@@ -925,7 +925,9 @@ class HydrusVideoDeduplicator:
                     if self.update_progress_callback:
                         self.update_progress_callback(NoneProgress(None))
                     if self.gpu_decode_auto and (stats.gpu_decoded_count or stats.cpu_decoded_count):
-                        print(f"[blue]{gpu_decode_auto_summary(stats.gpu_decoded_count, stats.cpu_decoded_count)}")
+                        print(
+                            f"[bright_blue]{gpu_decode_auto_summary(stats.gpu_decoded_count, stats.cpu_decoded_count)}"
+                        )
                     profile = getattr(self, "gpu_profile", None)
                     if self.gpu_decode_auto and profile is not None and profile.save_error:
                         profile.save_error_reported = True
@@ -1544,7 +1546,7 @@ class HydrusVideoDeduplicator:
         ):
             if fast_insert:
                 with pbar.external_write_mode(file=pbar.fp):
-                    print("[blue]Using fast search tree building.")
+                    print("[bright_blue]Using fast search tree building.")
             processed_count = 0
             for file_hash, perceptual_hash in results:
                 if self.update_progress_callback:
@@ -1591,7 +1593,7 @@ class HydrusVideoDeduplicator:
 
         if tree.maintenance_due():
             # TODO: Do further testing on this.
-            print("[blue]Running search tree maintenance...")
+            print("[bright_blue]Running search tree maintenance...")
             tree.maintain_tree()
 
     def find_potential_duplicates(
@@ -1637,15 +1639,15 @@ class HydrusVideoDeduplicator:
         if len(files) > 0 and tree.enable_fast_search_index():
             _section_gap()
             printed_using = True
-            print("[blue]Using fast search index.")
+            print("[bright_blue]Using fast search index.")
             # Skip the part of the tree walk every search takes identically (HVD_SCAN_SEARCH=0 disables).
             if tree.enable_fast_search_scan():
-                print("[blue]Using fast search scan.")
+                print("[bright_blue]Using fast search scan.")
         if len(files) > 0 and pipeline_enabled() and not self.dry_run:
             if not printed_using:
                 _section_gap()
                 printed_using = True
-            print("[blue]Using pipelined Hydrus calls.")
+            print("[bright_blue]Using pipelined Hydrus calls.")
 
         send = self.mark_videos_as_duplicates
         skipper = None
@@ -1663,7 +1665,7 @@ class HydrusVideoDeduplicator:
                 # Blue info line only when skip-repeat is on, grouped with the "Using ..." lines; display only
                 if not printed_using:
                     _section_gap()
-                console_print(Text(SKIP_REPEAT_PAIRS_INFO, style="blue"), highlight=False)
+                console_print(Text(SKIP_REPEAT_PAIRS_INFO, style="bright_blue"), highlight=False)
                 need_gap = True
 
         _section_gap()  # blank line before the progress bar when any of the sections above printed
@@ -1679,7 +1681,7 @@ class HydrusVideoDeduplicator:
         finally:
             if skipper is not None:
                 print(
-                    f"[blue]Skipped {skipper.skipped} repeat pair sends "
+                    f"[bright_blue]Skipped {skipper.skipped} repeat pair sends "
                     "(each of those pairs had already been sent to Hydrus in this run)."
                 )
             if self.dry_run:

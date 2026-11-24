@@ -93,7 +93,7 @@ def run_rehash_overhashed(db: DedupeDB.DedupeDb, client: HVDClient, job_count: i
     failed page. All-or-nothing: on an error or CTRL+C the database is left unchanged. Returns None if nothing was
     checked.
     """
-    print("[blue]Checking for over-hashed videos (hashed with too many frames)...")
+    print("[bright_blue]Checking for over-hashed videos (hashed with too many frames)...")
     candidates = db.get_hashed_frame_counts(OVERHASH_MIN_FRAMES)
     result = RehashResult()
     try:

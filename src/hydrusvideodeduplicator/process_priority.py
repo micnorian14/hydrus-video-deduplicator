@@ -114,5 +114,5 @@ def print_priority_info() -> bool:
     if not _info_pending:
         return False
     _info_pending = False
-    print(f"[blue]{BELOW_NORMAL_PRIORITY_INFO}")
+    print(f"[bright_blue]{BELOW_NORMAL_PRIORITY_INFO}")
     return True
