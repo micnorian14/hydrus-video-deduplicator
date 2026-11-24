@@ -50,6 +50,18 @@ def cuda_device() -> str | None:
     return value if value.isdigit() else None
 
 
+def decode_thread_count(num_threads: int, logical_cpus: int | None = None) -> int:
+    """FFmpeg decode threads for a job count, with the same rules as vpdq's hashing threads (hvdaccelerators):
+    a positive number is used as is, 0 is all CPU threads (FFmpeg picks, as before), and -n is all but n (at least 1).
+    """
+    if num_threads >= 0:
+        return num_threads
+    cpus = logical_cpus if logical_cpus is not None else (os.cpu_count() or 0)
+    if cpus <= 0 or -num_threads >= cpus:
+        return 1
+    return cpus + num_threads
+
+
 # The highest frame rate trusted from a fallback guess (see frames_per_hash). Real videos stay well below this.
 MAX_GUESSED_FPS = 240
 
@@ -233,8 +245,13 @@ class Vpdq:
             return None
 
     @staticmethod
-    def frame_extract_pyav(video_bytes: bytes, gpu_decode: bool = False) -> Iterator[av.VideoFrame]:
+    def frame_extract_pyav(
+        video_bytes: bytes, gpu_decode: bool = False, decode_threads: int = 0
+    ) -> Iterator[av.VideoFrame]:
         """Extract frames from video
+
+        decode_threads caps FFmpeg's CPU decoding threads (0 = FFmpeg picks: all CPU threads). Decoded frames, and
+        so the hashes, are the same for any thread count. GPU decoding doesn't use it.
 
         If gpu_decode is True, decoding uses the NVIDIA hardware decoder (CUDA/NVDEC). Hashes are
         identical for the codecs tested (H.264, HEVC, VP8, VP9). MPEG-4 and WMV3 can differ by a few
@@ -262,6 +279,8 @@ class Vpdq:
             on_gpu = gpu_decode and video.codec_context.is_hwaccel
             if not on_gpu:
                 video.thread_type = "AUTO"
+                # Must be set before the first frame is decoded (that opens the decoder).
+                video.thread_count = max(0, int(decode_threads))
             _decode_state.used_gpu = on_gpu
             checked_first_frame = not on_gpu
 
@@ -331,7 +350,9 @@ class Vpdq:
         # the timestamp so this value doesn't matter.
         average_fps = 1
         hasher = vpdq.VideoHasher(average_fps, DOWNSCALE_DIMENSIONS, DOWNSCALE_DIMENSIONS, num_threads)
-        for frame in Vpdq.frame_extract_pyav(video, gpu_decode=gpu_decode):
+        # The job count caps CPU decoding too, not only hashing (decoding is most of the CPU work).
+        decode_threads = decode_thread_count(num_threads)
+        for frame in Vpdq.frame_extract_pyav(video, gpu_decode=gpu_decode, decode_threads=decode_threads):
             # Note: hash_frame will block if vpdq's internal frame queue is full. This is necessary,
             # otherwise if hashing gets too far behind decoding there will be an insane amount of memory
             # used to hold the raw frames.

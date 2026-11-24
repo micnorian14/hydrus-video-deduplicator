@@ -33,9 +33,10 @@ from hydrusvideodeduplicator.db import DedupeDB
 from hydrusvideodeduplicator.__about__ import __version__
 from hydrusvideodeduplicator.config import (
     Config,
+    effective_job_count,
 )
 from hydrusvideodeduplicator.dedup_util import TqdmLoggingHandler, display_path, print_and_log
-from hydrusvideodeduplicator.process_priority import apply_process_priority
+from hydrusvideodeduplicator.process_priority import apply_process_priority, full_speed_requested
 from hydrusvideodeduplicator.db_tools import (
     backup_message,
     check_database,
@@ -483,11 +484,11 @@ If you change this value you should clear the search cache. This isn't cleared a
         self.similarity_threshold_textbox.setMaximumHeight(38)
 
         self.job_count_textbox = QLineEdit(
-            text=str(self.config.job_count),
+            text=str(effective_job_count(self.config.job_count, full_speed_requested())),
             placeholderText="REQUIRED: Number of CPU Threads to use for perceptual hashing",
         )
         self.job_count_textbox.setToolTip(
-            "Number of CPU cores to use for perceptual hashing. Default is all but one core.\nYou can use all CPUs/threads on your machine by setting to -1. If you set it to -2, all CPUs but one are used."  # noqa: E501
+            "Number of CPU threads for decoding and perceptual hashing. Default is half your CPU threads (all if HVD_FULL_SPEED=1 is set).\n0 uses all CPU threads, -1 all but one, -2 all but two."  # noqa: E501
         )
         self.job_count_textbox.setMaximumHeight(38)
 

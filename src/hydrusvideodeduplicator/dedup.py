@@ -32,12 +32,12 @@ import requests
 from .client import HVDClient
 from .db import DedupeDB, vptree
 from .dedup_util import console_print, display_path, memory_status, print_success, print_user, style_user_text
-from .config import GPU_DECODE_AUTO
+from .config import GPU_DECODE_AUTO, logical_cpu_count, resolve_job_count
 from .hashing import compute_phash, last_decode_used_gpu, probe_video_details, video_prefers_gpu_decode
 from . import gpu_profile
 from .gpu_profile import GpuProfile
 from .page_logger import HydrusPageLogger, resolve_failed_page_name
-from .process_priority import print_priority_info
+from .process_priority import full_speed_requested, print_priority_info
 from hvdaccelerators import vpdq
 
 
@@ -277,22 +277,45 @@ def hash_alone(file_size: int, total_bytes: int | None) -> bool:
     return total_bytes is not None and file_size > total_bytes * AUTO_RAM_ALONE_FRACTION
 
 
-def logical_cpu_count() -> int:
-    """CPUs this process may use (respects affinity and containers where Python can tell)."""
-    try:
-        return len(os.sched_getaffinity(0))
-    except (AttributeError, OSError):
-        return os.cpu_count() or 1
+def may_prefetch(current_file, largest_file: int, full_speed: bool = True) -> bool:
+    """Normal hashing (not auto): True if the next video may download while `current_file` is hashed.
 
-
-def auto_worker_settings(logical_cpus: int, job_count: int) -> tuple[int, bool]:
-    """--gpu-decode auto on weak CPUs: (hashing threads for the GPU worker, whether it helps with CPU videos).
-
-    Below 4 CPUs the GPU worker hashes with 1 thread so it doesn't slow the CPU worker. At 2 or fewer it also
-    doesn't take CPU videos.
+    Same RAM rules as --gpu-decode auto: not next to a video bigger than AUTO_RAM_ALONE_FRACTION of all RAM, and
+    only if AUTO_RAM_RESERVE stays free after room for two copies of the largest video so far (auto_ready_limit).
+    The default (reduced) mode also wants AUTO_RAM_HEADROOM more free. Otherwise the next video downloads after this
+    one is hashed. Unknown RAM: always.
     """
-    gpu_threads = 1 if logical_cpus < 4 else job_count
-    return gpu_threads, AUTO_SHARE_WORK and logical_cpus > 2
+    status = memory_status()
+    if status is None:
+        return True
+    free_bytes, total_bytes = status
+    if isinstance(current_file, (bytes, bytearray)) and hash_alone(len(current_file), total_bytes):
+        return False
+    return auto_ready_limit(free_bytes, largest_file) >= (1 if full_speed else AUTO_READY_FILES)
+
+
+def auto_ready_files(full_speed: bool) -> int:
+    """--gpu-decode auto: most downloaded videos that may wait for a worker (fewer in the default, reduced mode)."""
+    return AUTO_READY_FILES if full_speed else 1
+
+
+def auto_worker_settings(logical_cpus: int, job_count: int) -> tuple[int, int, bool]:
+    """--gpu-decode auto: (CPU worker threads, GPU worker threads, whether the GPU worker helps with CPU videos).
+
+    The two workers split the --job-count threads (decoding and hashing), so together they use no more than one
+    video on the CPU would. The GPU worker barely needs the CPU (NVDEC decodes, it only hashes about one frame per
+    second), so it gets a quarter (at least 1, exactly 1 below 4 CPUs); its CPU fallback (e.g. HEVC on older cards)
+    also stays within that share. A job count of 1 can't be split: each worker gets 1 thread. --job-count 0 (all
+    threads) isn't capped: both workers use all CPU threads, as before. At 2 or fewer CPUs the GPU worker doesn't
+    take CPU videos.
+    """
+    share_work = AUTO_SHARE_WORK and logical_cpus > 2
+    if int(job_count) == 0:
+        return 0, 0, share_work
+    budget = resolve_job_count(job_count, logical_cpus)
+    gpu_threads = 1 if logical_cpus < 4 else max(1, budget // 4)
+    cpu_threads = max(1, budget - gpu_threads)
+    return cpu_threads, gpu_threads, share_work
 
 
 def _join_threads(threads, timeout: float) -> None:
@@ -525,6 +548,16 @@ class FailedPerceptualHashException(Exception):
         self.other_exc = other_exc
 
 
+OUT_OF_MEMORY_MESSAGE = "Not enough memory to download or hash this video."
+
+
+def failed_hash_message(exc: BaseException) -> str:
+    """The text for a failed file. MemoryError usually has no message, so it gets one."""
+    if isinstance(exc, MemoryError):
+        return f"{OUT_OF_MEMORY_MESSAGE} {exc}".rstrip()
+    return str(exc)
+
+
 class FileHasher:
     """
     A class to fetch a file from Hydrus and phash it.
@@ -542,6 +575,9 @@ class FileHasher:
             return response.content
         except (hydrus_api.HydrusAPIException, requests.RequestException) as exc:
             raise HydrusApiException(exc)
+        except MemoryError as exc:
+            # Too big for the free RAM: this file fails (failed page), the run goes on.
+            raise FailedPerceptualHashException(failed_hash_message(exc))
         finally:
             if response is not None:
                 response.close()
@@ -552,8 +588,8 @@ class FileHasher:
         try:
             phash = compute_phash(file, self.num_threads, gpu_decode)
             phash_bytes: bytes = phash.bytes
-        except Exception as exc:
-            raise FailedPerceptualHashException(str(exc))
+        except Exception as exc:  # includes MemoryError: this file fails, the run goes on
+            raise FailedPerceptualHashException(failed_hash_message(exc))
 
         # sanity check
         # Note: Hashes may have 0 bytes if there was no frames that were high enough quality to be used.
@@ -562,9 +598,10 @@ class FileHasher:
 
         return phash_bytes
 
-    def fetch_file_or_error(self, file_hash: str) -> bytes | HydrusApiException:
+    def fetch_file_or_error(self, file_hash: str) -> bytes | HydrusApiException | FailedPerceptualHashException:
         """
-        Retrieves the file from Hydrus. Returns the file bytes, or the HydrusApiException if it failed.
+        Retrieves the file from Hydrus. Returns the file bytes, or the HydrusApiException if it failed, or a
+        FailedPerceptualHashException if there wasn't enough memory for the file.
 
         Safe to run in a background thread so the next file downloads while the current one is hashed.
         """
@@ -577,15 +614,20 @@ class FileHasher:
             # for the number of failures before hashing is stopped entirely.
             time.sleep(3)
             return exc
+        except FailedPerceptualHashException as exc:
+            return exc
 
     def phash_fetched_file(
-        self, file_hash: str, file_or_error: bytes | HydrusApiException, gpu_decode: bool | None = None
+        self,
+        file_hash: str,
+        file_or_error: bytes | HydrusApiException | FailedPerceptualHashException,
+        gpu_decode: bool | None = None,
     ) -> PerceptuallyHashedFile | FailedPerceptuallyHashedFile:
         """Calculates the perceptual hash of an already fetched file and returns the result.
 
         gpu_decode overrides this FileHasher's setting for this one file (used by --gpu-decode auto).
         """
-        if isinstance(file_or_error, HydrusApiException):
+        if isinstance(file_or_error, (HydrusApiException, FailedPerceptualHashException)):
             return FailedPerceptuallyHashedFile(file_hash, file_or_error)
 
         try:
@@ -681,8 +723,12 @@ class HydrusVideoDeduplicator:
         skip_repeat_pairs: bool = False,
         reset_gpu_profile: bool = False,
         dry_run: bool = False,
+        full_speed: bool | None = None,
     ):
         self.db = db
+        # --full-speed: more videos downloaded ahead. None: from HVD_FULL_SPEED / HVD_NORMAL_PRIORITY.
+        # (Its thread count comes in as job_count, see config.effective_job_count.)
+        self.full_speed = full_speed_requested() if full_speed is None else bool(full_speed)
         # False: CPU decode. True: GPU decode (--gpu-decode all). GPU_DECODE_AUTO: --gpu-decode auto.
         self.gpu_decode = gpu_decode
         self.gpu_decode_auto = gpu_decode == GPU_DECODE_AUTO
@@ -917,11 +963,14 @@ class HydrusVideoDeduplicator:
                 # Download the next file from Hydrus in a background thread while the current file is hashed.
                 # Only one file is fetched ahead, and results are still processed and saved one at a time
                 # in the original order, so the database writes are exactly the same as before.
+                # With low free RAM or a huge video, the next download waits until this video is hashed (see
+                # may_prefetch), so at most one video is in memory.
                 video_hashes = list(video_hashes)
                 prefetcher = ThreadPoolExecutor(max_workers=1, thread_name_prefix="hvd-prefetch")
                 next_fetch = (
                     prefetcher.submit(filehasher.fetch_file_or_error, video_hashes[0]) if video_hashes else None
                 )
+                largest_file = 0
                 try:
                     for index, video_hash in enumerate(video_hashes):
                         if self.update_progress_callback:
@@ -929,9 +978,15 @@ class HydrusVideoDeduplicator:
                         if self.should_skip_step_fn and self.should_skip_step_fn():
                             return stats
 
-                        fetched = next_fetch.result()
+                        if next_fetch is None:
+                            fetched = filehasher.fetch_file_or_error(video_hash)  # prefetch skipped: low RAM
+                        else:
+                            fetched = next_fetch.result()
                         next_fetch = None
-                        if index + 1 < len(video_hashes):
+                        if isinstance(fetched, (bytes, bytearray)):
+                            largest_file = max(largest_file, len(fetched))
+                        full_speed = getattr(self, "full_speed", True)
+                        if index + 1 < len(video_hashes) and may_prefetch(fetched, largest_file, full_speed):
                             next_fetch = prefetcher.submit(filehasher.fetch_file_or_error, video_hashes[index + 1])
                         result = filehasher.phash_fetched_file(video_hash, fetched)
                         del fetched
@@ -1007,7 +1062,9 @@ class HydrusVideoDeduplicator:
         """
         use_gpu = self.gpu_decode_available
         profile = getattr(self, "gpu_profile", None) if use_gpu else None
-        gpu_threads, share_work = auto_worker_settings(logical_cpu_count(), filehasher.num_threads)
+        cpu_threads, gpu_threads, share_work = auto_worker_settings(logical_cpu_count(), filehasher.num_threads)
+        cpu_filehasher = FileHasher(self.client, cpu_threads)
+        ready_files = auto_ready_files(getattr(self, "full_speed", True))
         gpu_filehasher = FileHasher(self.client, gpu_threads)
         total = len(video_hashes)
         cond = threading.Condition()
@@ -1026,7 +1083,8 @@ class HydrusVideoDeduplicator:
             if memory["alone"]:
                 return False
             status = memory_status()
-            return len(waiting) < auto_ready_limit(status[0] if status else None, memory["largest"])
+            limit = min(auto_ready_limit(status[0] if status else None, memory["largest"]), ready_files)
+            return len(waiting) < limit
 
         def fetch_all() -> None:
             try:
@@ -1037,7 +1095,7 @@ class HydrusVideoDeduplicator:
                     if stop.is_set():
                         return
                     fetched = filehasher.fetch_file_or_error(file_hash)
-                    is_file = not isinstance(fetched, HydrusApiException)
+                    is_file = isinstance(fetched, (bytes, bytearray))  # not a download or out-of-memory error
                     info = probe_video_details(fetched) if profile is not None and is_file else None
                     if info is not None:
                         wants_gpu = profile.prefers_gpu(*info[:3])
@@ -1093,7 +1151,7 @@ class HydrusVideoDeduplicator:
             return memory["alone"] > sum(1 for item in waiting if item[3])
 
         def work(on_gpu: bool) -> None:
-            hasher = gpu_filehasher if on_gpu else filehasher
+            hasher = gpu_filehasher if on_gpu else cpu_filehasher
             try:
                 while not stop.is_set():
                     item = take(on_gpu)
@@ -1107,7 +1165,7 @@ class HydrusVideoDeduplicator:
                         # Timed on the worker that took it, including a GPU video that fell back to the CPU: that's
                         # what sending this kind of video to the GPU worker costs.
                         profile.record(*info, on_gpu=on_gpu, seconds=time.perf_counter() - started)
-                    decoded = not isinstance(fetched, HydrusApiException)
+                    decoded = isinstance(fetched, (bytes, bytearray))
                     used_gpu = last_decode_used_gpu() if on_gpu else False
                     decoded_on_gpu = on_gpu if used_gpu is None else used_gpu
                     del fetched

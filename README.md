@@ -9,7 +9,7 @@
 This is a fork of [Hydrus Video Deduplicator](https://github.com/hydrusvideodeduplicator/hydrus-video-deduplicator). It does the same job and gives the same results, faster.
 
 - Every speed change gives identical hashes, search tree and potential duplicate pairs.
-- New features are off unless you turn them on. The exceptions: failed files go to a Hydrus page named `failed`, if you've made one, and the tool runs at below-normal priority so your PC stays usable.
+- New features are off unless you turn them on. The exceptions: failed files go to a Hydrus page named `failed`, if you've made one, and the tool runs at below-normal priority with reduced CPU use so your PC stays usable (`--full-speed` turns that off).
 - The database format is unchanged, so a database used by this fork still works with the original program.
 
 It also adds `--relink-search-tree` to repair a damaged search tree, as reported in [issue #80](https://github.com/hydrusvideodeduplicator/hydrus-video-deduplicator/issues/80), and `--prune-orphans` to remove videos whose perceptual hash is missing, and `--dry-run` to see the pairs without sending anything to Hydrus.
@@ -107,7 +107,7 @@ program, without these changes. To use this fork, follow [Quick start](#quick-st
 **Speed.** GPU video decoding with `--gpu-decode auto` (recommended; learns your own CPU and GPU speeds) or `--gpu-decode all`, a faster check for already-hashed files at startup, downloading
 the next file while the current one is hashed, an exact in-memory distance index and a shorter tree walk for
 "Finding potential duplicates", faster search tree building, and Hydrus calls that run alongside the search. See
-[Speed optimizations](#speed-optimizations). By default the tool runs at below-normal priority so your PC stays usable.
+[Speed optimizations](#speed-optimizations). By default the tool runs at below-normal priority with reduced CPU use so your PC stays usable.
 
 **Fixes.** `--relink-search-tree` repairs a damaged search tree in seconds ([issue #80](https://github.com/hydrusvideodeduplicator/hydrus-video-deduplicator/issues/80)). `--prune-orphans` removes videos whose perceptual hash is missing so they can be hashed again. Each run also prints two quick read-only checks for those problems. CTRL+C while
 building the search tree saves only fully added videos. Videos with no usable frame rate in their header (some WebMs and GIFs)
@@ -230,7 +230,7 @@ More on running the program is in [Usage](./docs/usage.md).
 | [`--backup`](#--backup) | You want a copy of the dedupe database before each run changes it. |
 | [`--gpu-decode auto`](#gpu-decoding---gpu-decode-auto-or---gpu-decode-all) | You have an NVIDIA GPU. Recommended: hashing uses the GPU and the CPU together. `--gpu-decode all` tries to force all files to decode on the GPU. |
 | [`--reset-gpu-profile`](#gpu-decoding---gpu-decode-auto-or---gpu-decode-all) | Once, to make `--gpu-decode auto` relearn your CPU and GPU speeds. |
-| [`--normal-priority`](#--normal-priority) | You want the tool to run at full priority, even while you use your PC. |
+| [`--full-speed`](#--full-speed) | You want the tool to use all CPU cores at full priority, even while you use your PC. |
 | [`--skip-repeat-pairs`](#--skip-repeat-pairs) | You want fewer Hydrus API calls while finding potential duplicates. |
 | [`--dry-run`](#--dry-run) | You want to see the pairs without sending them to Hydrus. |
 | [`--relink-search-tree`](#--relink-search-tree) | Once, if the program warns about search tree issues. |
@@ -301,21 +301,31 @@ so duplicate detection isn't affected.
   be read, it uses the rules above and starts learning again.
 - To make it start over, add `--reset-gpu-profile` to one run. In the GUI, delete `gpu_profile.json` instead.
 
-### `--normal-priority`
+### `--full-speed`
 
-By default the tool runs at below-normal priority so your PC stays usable. When the PC is idle, it still runs at nearly
-full speed. When you use other apps, they get the CPU first and the tool slows down.
+By default the tool goes easy on your PC so it stays usable:
 
-Add `--normal-priority` to run at normal priority. That is faster while you use the PC, but other apps may lag.
+- Decoding and hashing use half your CPU threads (6 on a 12-thread CPU, at least 1).
+- It runs at below-normal priority, so other apps get the CPU first. On Windows, its memory also gets low priority, so
+  other apps keep theirs when RAM runs short.
+- Fewer videos are downloaded ahead of time.
+
+Add `--full-speed` to use all CPU cores at normal priority and download more videos ahead. That is faster, but other
+apps may lag while it runs.
 
 ```sh
-python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --normal-priority
+python -m hydrusvideodeduplicator --api-key="YOUR_API_KEY" --full-speed
 ```
 
-- You can also set the environment variable `HVD_NORMAL_PRIORITY=1`. The GUI ignores command line flags, so use the
+- You can also set the environment variable `HVD_FULL_SPEED=1`. The GUI ignores command line flags, so use the
   environment variable there.
-- To use fewer CPU threads, use `--job-count`. With `--gpu-decode auto`, the GPU side uses the same thread count too, so
-  the total can be about twice that.
+- `--normal-priority` and `HVD_NORMAL_PRIORITY=1` still work and do the same as `--full-speed`.
+- To pick the number of CPU threads yourself, use `--job-count` (or `JOB_COUNT`) in either mode. It limits both
+  decoding and hashing. `0` uses all CPU threads, `-1` all but one and `-2` all but two. With `--gpu-decode auto`, the
+  GPU and CPU workers share that number, so together they use about that many threads.
+- How much faster is `--full-speed`? On a Ryzen 5600X (12 threads), CPU decoding of a 1080p H.264 video took 0.70 s with
+  6 threads and 0.51 s with all of them. A 720p HEVC video took the same time either way. The speed numbers in this
+  README were measured with all CPU threads, like `--full-speed`.
 
 ### `--skip-repeat-pairs`
 

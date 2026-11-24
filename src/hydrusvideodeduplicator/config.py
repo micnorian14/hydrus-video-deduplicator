@@ -8,6 +8,45 @@ from platform import uname
 from platformdirs import PlatformDirs
 
 
+def logical_cpu_count() -> int:
+    """CPUs this process may use (respects affinity and containers where Python can tell)."""
+    try:
+        return len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        return os.cpu_count() or 1
+
+
+def default_job_count(full_speed: bool = False, logical_cpus: int | None = None) -> int:
+    """The --job-count used when it isn't set (CPU threads for decoding and hashing a video).
+
+    Default mode: half the CPU threads, at least 1 (e.g. 12 -> 6, 4 -> 2, 1 -> 1).
+    Full speed (--full-speed): 0, all CPU threads, like before.
+    """
+    if full_speed:
+        return 0
+    cpus = max(1, logical_cpus if logical_cpus is not None else logical_cpu_count())
+    return max(1, cpus // 2)
+
+
+def effective_job_count(job_count, full_speed: bool = False, logical_cpus: int | None = None) -> int:
+    """--job-count / JOB_COUNT if set (in either mode), else the mode's default (default_job_count)."""
+    if job_count is None or str(job_count).strip() == "":
+        return default_job_count(full_speed, logical_cpus)
+    return int(job_count)
+
+
+def resolve_job_count(job_count: int, logical_cpus: int | None = None) -> int:
+    """The number of threads a --job-count means: a positive number as is, 0 = all CPU threads, -n = all but n
+    (at least 1). Same rules as vpdq's hashing threads (hvdaccelerators)."""
+    cpus = max(1, logical_cpus if logical_cpus is not None else logical_cpu_count())
+    job_count = int(job_count)
+    if job_count > 0:
+        return job_count
+    if job_count == 0:
+        return cpus
+    return max(1, cpus + job_count)
+
+
 class InvalidEnvironmentVariable(Exception):
     """Raise for when environment variables are invalid."""
 
@@ -182,7 +221,8 @@ class Config:
 
         config.similarity_threshold = config_map.get("SIMILARITY_THRESHOLD", 50.0)
 
-        config.job_count = config_map.get("JOB_COUNT", -2)
+        # None: not set, the mode's default is used (see effective_job_count).
+        config.job_count = config_map.get("JOB_COUNT", None)
 
         config.hvd_gui = config_map.get("HVD_GUI", False)
 

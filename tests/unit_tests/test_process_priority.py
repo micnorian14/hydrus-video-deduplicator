@@ -11,20 +11,73 @@ from unittest import mock
 from hydrusvideodeduplicator import process_priority as pp
 
 
+_ENV_NAMES = ("HVD_NORMAL_PRIORITY", "HVD_FULL_SPEED")
+
+
+def _unwrapped(text: str) -> str:
+    """Rich wraps long lines at the (captured) console width; join them back for comparing."""
+    return " ".join(text.split())
+
+
 class TestProcessPriority(unittest.TestCase):
     def setUp(self):
         pp._applied = False
         pp._info_pending = False
-        self._old_env = os.environ.get("HVD_NORMAL_PRIORITY")
-        os.environ.pop("HVD_NORMAL_PRIORITY", None)
+        self._old_env = {name: os.environ.get(name) for name in _ENV_NAMES}
+        for name in _ENV_NAMES:
+            os.environ.pop(name, None)
 
     def tearDown(self):
         pp._applied = False
         pp._info_pending = False
-        if self._old_env is None:
-            os.environ.pop("HVD_NORMAL_PRIORITY", None)
-        else:
-            os.environ["HVD_NORMAL_PRIORITY"] = self._old_env
+        for name, value in self._old_env.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+    def test_full_speed_flag_and_env_skip_lowering(self):
+        with mock.patch.object(pp, "_set_below_normal_priority") as set_prio:
+            self.assertFalse(pp.apply_process_priority(full_speed=True))
+        set_prio.assert_not_called()
+        for value in ("1", "true", "YES", "On"):
+            with self.subTest(value=value):
+                pp._applied = False
+                os.environ["HVD_FULL_SPEED"] = value
+                with mock.patch.object(pp, "_set_below_normal_priority") as set_prio:
+                    self.assertFalse(pp.apply_process_priority())
+                set_prio.assert_not_called()
+        os.environ["HVD_FULL_SPEED"] = "0"
+        self.assertFalse(pp.full_speed_requested())
+        self.assertTrue(pp.full_speed_requested(True))
+
+    def test_normal_priority_is_an_alias_for_full_speed(self):
+        self.assertTrue(pp.full_speed_requested(False) is False)
+        os.environ["HVD_NORMAL_PRIORITY"] = "1"
+        self.assertTrue(pp.full_speed_requested())
+
+    def test_info_line_text(self):
+        self.assertEqual(
+            pp.BELOW_NORMAL_PRIORITY_INFO,
+            "Running at below-normal priority with reduced CPU use. Add --full-speed to use all CPU cores.",
+        )
+
+    def test_windows_also_lowers_memory_priority_and_never_uses_background_mode(self):
+        with mock.patch.object(pp.sys, "platform", "win32"):
+            with mock.patch.object(pp, "_windows_set_priority_class") as set_class:
+                with mock.patch.object(pp, "_windows_set_low_memory_priority") as set_memory:
+                    pp._set_below_normal_priority()
+        set_class.assert_called_once_with(pp.BELOW_NORMAL_PRIORITY_CLASS)
+        set_memory.assert_called_once_with()
+        # PROCESS_MODE_BACKGROUND_BEGIN (0x00100000) caps the working set at about 32 MiB: never used.
+        self.assertNotIn(0x00100000, [c.args[0] for c in set_class.call_args_list])
+
+    def test_memory_priority_failure_keeps_below_normal(self):
+        with mock.patch.object(pp.sys, "platform", "win32"):
+            with mock.patch.object(pp, "_windows_set_priority_class") as set_class:
+                with mock.patch.object(pp, "_windows_set_low_memory_priority", side_effect=OSError("old Windows")):
+                    pp._set_below_normal_priority()
+        set_class.assert_called_once_with(pp.BELOW_NORMAL_PRIORITY_CLASS)
 
     def test_default_lowers_priority_and_prints_info(self):
         with mock.patch.object(pp, "_set_below_normal_priority") as set_prio:
@@ -36,7 +89,7 @@ class TestProcessPriority(unittest.TestCase):
         self.assertEqual(out.getvalue(), "")
         with redirect_stdout(io.StringIO()) as out:
             self.assertTrue(pp.print_priority_info())
-        self.assertIn(pp.BELOW_NORMAL_PRIORITY_INFO, out.getvalue())
+        self.assertIn(pp.BELOW_NORMAL_PRIORITY_INFO, _unwrapped(out.getvalue()))
 
     def test_flag_skips_lowering(self):
         with mock.patch.object(pp, "_set_below_normal_priority") as set_prio:
@@ -91,7 +144,7 @@ class TestProcessPriority(unittest.TestCase):
                 self.assertTrue(pp.print_priority_info())
                 self.assertFalse(pp.print_priority_info())
         set_prio.assert_called_once_with()
-        self.assertEqual(out.getvalue().count(pp.BELOW_NORMAL_PRIORITY_INFO), 1)
+        self.assertEqual(_unwrapped(out.getvalue()).count(pp.BELOW_NORMAL_PRIORITY_INFO), 1)
 
     def test_no_info_line_when_priority_not_lowered(self):
         with mock.patch.object(pp, "_set_below_normal_priority"):
@@ -103,8 +156,9 @@ class TestProcessPriority(unittest.TestCase):
     def test_windows_sets_below_normal_priority_class(self):
         with mock.patch.object(pp.sys, "platform", "win32"):
             with mock.patch.object(pp, "_windows_set_priority_class") as set_class:
-                with mock.patch.object(pp.os, "nice", create=True) as nice:
-                    pp._set_below_normal_priority()
+                with mock.patch.object(pp, "_windows_set_low_memory_priority"):
+                    with mock.patch.object(pp.os, "nice", create=True) as nice:
+                        pp._set_below_normal_priority()
         set_class.assert_called_once_with(0x4000)
         nice.assert_not_called()
 

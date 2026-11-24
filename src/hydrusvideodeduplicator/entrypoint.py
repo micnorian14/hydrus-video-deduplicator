@@ -21,6 +21,7 @@ from hydrusvideodeduplicator.client import (
 from hydrusvideodeduplicator.config import (
     Config,
     GpuDecodeArgError,
+    effective_job_count,
     normalize_gpu_decode_args,
     resolve_gpu_decode,
 )
@@ -41,7 +42,7 @@ from hydrusvideodeduplicator.dedup_util import (
     print_and_log,
     style_user_text,
 )
-from hydrusvideodeduplicator.process_priority import apply_process_priority, print_priority_info
+from hydrusvideodeduplicator.process_priority import apply_process_priority, full_speed_requested, print_priority_info
 from dotenv import find_dotenv, load_dotenv
 
 import sys
@@ -131,11 +132,22 @@ def main(
     ] = config.failed_page_name,
     job_count: Annotated[
         Optional[int],
-        typer.Option(help="Number of CPU threads to use for perceptual hashing. Default is all but one core."),
+        typer.Option(
+            help="Number of CPU threads for decoding and perceptual hashing. Default is half your CPU threads "
+            "(all with --full-speed). 0 = all, -1 = all but one, -2 = all but two.",
+            show_default=False,
+        ),
     ] = config.job_count,
+    full_speed: Annotated[
+        Optional[bool],
+        typer.Option(
+            help="Use all CPU cores at normal priority, even while you use your PC. Default is reduced CPU use at "
+            "below-normal priority."
+        ),
+    ] = False,
     normal_priority: Annotated[
         Optional[bool],
-        typer.Option(help="Run at normal priority, even while you use your PC. Default is below-normal."),
+        typer.Option(help="Same as --full-speed (old name)."),
     ] = False,
     # Checked and normalized by normalize_gpu_decode_args; the default comes from GPU_DECODE.
     gpu_decode: Annotated[
@@ -176,7 +188,7 @@ def main(
     ] = config.hvd_gui,
 ):
     # Fix mypy errors from optional parameters
-    assert threshold is not None and skip_hashing is not None and job_count is not None
+    assert threshold is not None and skip_hashing is not None
 
     # CLI debug parameter sets log level to info or debug
     loglevel = logging.INFO
@@ -202,7 +214,10 @@ def main(
     if not verbose:
         logging.disable()
 
-    apply_process_priority(normal_priority=bool(normal_priority))
+    # Default: reduced CPU use at below-normal priority. --full-speed (or --normal-priority): all cores, normal.
+    full_speed = full_speed_requested(bool(full_speed) or bool(normal_priority))
+    job_count = effective_job_count(job_count, full_speed)
+    apply_process_priority(full_speed=full_speed)
 
     DedupeDB.set_db_dir(dedup_database_dir)
 
@@ -385,6 +400,7 @@ def main(
         skip_repeat_pairs=bool(skip_repeat_pairs),
         reset_gpu_profile=bool(reset_gpu_profile),
         dry_run=bool(dry_run),
+        full_speed=full_speed,
     )
 
     if debug:

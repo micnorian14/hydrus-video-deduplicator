@@ -150,13 +150,27 @@ class TestRamSafeguard(unittest.TestCase):
 
 class TestWorkerSettings(unittest.TestCase):
     def test_threads_and_sharing(self):
-        self.assertEqual(dedup.auto_worker_settings(1, -2), (1, False))
-        self.assertEqual(dedup.auto_worker_settings(2, -2), (1, False))
-        self.assertEqual(dedup.auto_worker_settings(3, -2), (1, True))
-        self.assertEqual(dedup.auto_worker_settings(4, -2), (-2, True))
-        self.assertEqual(dedup.auto_worker_settings(12, 6), (6, True))
+        # (CPU worker threads, GPU worker threads, GPU worker helps with CPU videos)
+        self.assertEqual(dedup.auto_worker_settings(1, -2), (1, 1, False))
+        self.assertEqual(dedup.auto_worker_settings(2, -2), (1, 1, False))
+        self.assertEqual(dedup.auto_worker_settings(3, -2), (1, 1, True))
+        self.assertEqual(dedup.auto_worker_settings(4, -2), (1, 1, True))
+        self.assertEqual(dedup.auto_worker_settings(12, 6), (5, 1, True))
+        self.assertEqual(dedup.auto_worker_settings(12, 0), (0, 0, True))  # 0 = all threads: not capped, as before
         with mock.patch.object(dedup, "AUTO_SHARE_WORK", False):
-            self.assertEqual(dedup.auto_worker_settings(12, -2), (-2, False))
+            self.assertEqual(dedup.auto_worker_settings(12, -2), (8, 2, False))
+
+    def test_split_never_exceeds_the_job_count(self):
+        for cpus in range(1, 65):
+            for job_count in [*range(-cpus - 1, 0), *range(1, 2 * cpus + 2)]:
+                cpu_threads, gpu_threads, _ = dedup.auto_worker_settings(cpus, job_count)
+                budget = dedup.resolve_job_count(job_count, cpus)
+                self.assertGreaterEqual(cpu_threads, 1)
+                self.assertGreaterEqual(gpu_threads, 1)
+                # A budget of 1 can't be split; otherwise the two workers together stay within it.
+                self.assertLessEqual(cpu_threads + gpu_threads, max(budget, 2), (cpus, job_count))
+                if budget >= 2:
+                    self.assertEqual(cpu_threads + gpu_threads, budget, (cpus, job_count))
 
     def test_logical_cpu_count(self):
         self.assertGreaterEqual(dedup.logical_cpu_count(), 1)
