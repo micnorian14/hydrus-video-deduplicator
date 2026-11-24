@@ -12,7 +12,7 @@ from rich import print
 
 from ..__about__ import __version__
 from ..dedup_util import print_user
-from .vptree import VpTreeManager, chain_tree_rows, splice_out_tree_nodes
+from .vptree import VpTreeManager, chain_tree_rows, flush_pending_tree_writes, splice_out_tree_nodes
 
 
 dedupedblog = logging.getLogger("db")
@@ -209,6 +209,7 @@ class DedupeDb:
         self.set_cursor(cur)
 
     def commit(self):
+        flush_pending_tree_writes(self)  # deferred fast tree building counts (no-op otherwise)
         self.conn.commit()
 
     def begin_transaction(self):

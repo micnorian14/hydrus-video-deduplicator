@@ -277,6 +277,9 @@ def build_key_to_list_dict(pairs):
 #   * node rows are read once from the DB and then kept in memory (and updated in memory exactly as the DB is);
 #   * distances come from the exact SearchDistanceIndex (db/fast_search.py), falling back to calculate_distance;
 #   * the population UPDATEs are sent with executemany (same statements, same order, less Python overhead);
+#   * the "prefix" (the run of nodes from the root that every insert passes the same way, e.g. the whole chain
+#     after a relink) is not walked node by node: see _FastInsertState. Its inner_population increments are
+#     kept in memory and written in one go (flush) before every commit, so every committed tree is identical;
 #   * all of one file's tree writes happen inside a SAVEPOINT, so an interruption (Ctrl+C) can never leave a
 #     half-inserted file in the tree; the tree is then exactly as it was before that file.
 # The in-memory copy is only valid while nothing else modifies shape_vptree, which is true during that phase.
@@ -318,9 +321,32 @@ def scan_search_enabled() -> bool:
 class _FastInsertState:
     def __init__(self, db: DedupeDB.DedupeDb):
         self.db = db
-        # phash_id -> [phash, radius, inner_id, inner_population, outer_id, outer_population], same as the DB row
+        # phash_id -> [phash, radius, inner_id, inner_population, outer_id, outer_population], same as the DB row.
+        # Holds the nodes visited after the prefix (see below); prefix nodes are kept in the arrays below instead.
         self.nodes = {}
         self.distance_index = None
+        self._in_prefix_position = None  # bool per index position: is that node in the prefix
+        self.prefix_disabled = False  # True: never use the prefix (only after finding a loop in the tree)
+        self.reset_prefix()
+
+    # The prefix: the longest run of nodes from the root that every insert walks through the same way, whatever
+    # the new file is. A node with an inner child and radius >= MAX_DISTANCE always sends the walk inside (every
+    # distance is <= MAX_DISTANCE), so the original walk does exactly this at each prefix node: count the new file
+    # in inner_population, check the balance, go to the inner child. No distance is needed for these nodes. Their
+    # radius, inner_id and outer_id can never change (an insert only sets them on a node without that child),
+    # so the prefix only ever grows at its end.
+    def reset_prefix(self):
+        self.prefix_root = None  # root the prefix was built for (None: not built)
+        self.prefix_ids = []
+        self.prefix_set = set()
+        self.prefix_next = None  # inner child of the last prefix node: where the walk continues normally
+        self._prefix_inner = np.zeros(0, dtype=np.int64)  # inner_population of each prefix node, as in the tree
+        self._prefix_outer = np.zeros(0, dtype=np.int64)  # outer_population of each prefix node (never changes)
+        # Deferred inner_population increments of prefix nodes: one (phash_id, prefix length) per added file; the
+        # first `prefix length` prefix nodes each get +1 for it. Written by flush(), always before a commit.
+        self.pending = []
+        if self._in_prefix_position is not None:
+            self._in_prefix_position[:] = False
 
     def get_node(self, phash_id):
         node = self.nodes.get(phash_id)
@@ -334,13 +360,173 @@ class _FastInsertState:
             node = self.nodes[phash_id] = list(row)
         return node
 
+    @staticmethod
+    def _always_inside(radius, inner_id) -> bool:
+        return inner_id is not None and radius is not None and radius >= MAX_DISTANCE
+
+    def _append_prefix(self, phash_id, inner_population, outer_population, inner_id):
+        k = len(self.prefix_ids)
+        if k == len(self._prefix_inner):
+            grow = max(1024, 2 * k)
+            self._prefix_inner = np.concatenate([self._prefix_inner, np.zeros(grow, dtype=np.int64)])
+            self._prefix_outer = np.concatenate([self._prefix_outer, np.zeros(grow, dtype=np.int64)])
+        self._prefix_inner[k] = inner_population
+        self._prefix_outer[k] = outer_population
+        self.prefix_ids.append(phash_id)
+        self.prefix_set.add(phash_id)
+        self.prefix_next = inner_id
+        if self.distance_index is not None:
+            position = self.distance_index.position_of.get(phash_id)
+            if position is not None:
+                self._in_prefix_position[position] = True
+
+    def prefix_for(self, root_id) -> int:
+        """Length of the prefix for this root, building it from the database the first time."""
+        if self.prefix_disabled:
+            return 0
+        if self.prefix_root == root_id:
+            return len(self.prefix_ids)
+        self.flush()
+        self.reset_prefix()
+        if self.distance_index is not None and self._in_prefix_position is None:
+            self._in_prefix_position = np.zeros(self.distance_index.num_nodes, dtype=bool)
+        # Same join get_node() uses, so "node exists" means exactly the same thing.
+        rows = {
+            phash_id: (radius, inner_id, inner_population, outer_population)
+            for (phash_id, radius, inner_id, inner_population, outer_population) in self.db.execute(
+                "SELECT phash_id, radius, inner_id, inner_population, outer_population FROM shape_perceptual_hashes NATURAL JOIN shape_vptree;"  # noqa: E501
+            )
+        }
+        self.prefix_root = root_id
+        self.prefix_next = root_id
+        node_id = root_id
+        while node_id is not None and node_id not in self.prefix_set:  # terminates: every node is taken once
+            row = rows.get(node_id)
+            if row is None or not self._always_inside(row[0], row[1]):
+                break
+            self.nodes.pop(node_id, None)
+            self._append_prefix(node_id, row[2], row[3], row[1])
+            node_id = row[1]
+        del rows
+        return len(self.prefix_ids)
+
+    def extend_prefix(self):
+        """After an insert: the node after the prefix may now always send the walk inside (it got an inner child
+        with radius MAX_DISTANCE). Move such nodes into the prefix, with their current (already written) counts."""
+        if self.prefix_root is None:
+            return
+        while self.prefix_next is not None and self.prefix_next not in self.prefix_set:
+            node_id = self.prefix_next
+            node = self.get_node(node_id)
+            if node is None or not self._always_inside(node[1], node[2]):
+                return
+            del self.nodes[node_id]
+            self._append_prefix(node_id, node[3], node[5], node[2])
+
+    def first_unbalanced_prefix_node(self, prefix_len: int):
+        """
+        Position of the first prefix node that the original balance check flags for this insert, or None. The check
+        is the original one: (inner + 1) + outer > 16 and min / max < 0.5, with inner + 1 because the walk counts
+        the new file first. Float division of two int64 values is the same IEEE operation Python uses for ints.
+        """
+        inner = int(self._prefix_inner[0]) + 1
+        outer = int(self._prefix_outer[0])
+        if inner + outer > 16 and min(inner, outer) / max(inner, outer) < 0.5:
+            return 0  # the usual case (a chain root): no array work needed
+        inner = self._prefix_inner[:prefix_len] + 1
+        outer = self._prefix_outer[:prefix_len]
+        candidates = np.flatnonzero(inner + outer > 16)
+        if len(candidates) == 0:
+            return None
+        a = inner[candidates]
+        b = outer[candidates]
+        flagged = np.flatnonzero(np.minimum(a, b) / np.maximum(a, b) < 0.5)
+        return int(candidates[flagged[0]]) if len(flagged) else None
+
+    def count_in_prefix(self, phash_id, prefix_len: int):
+        """In-memory part of an insert that walked the first prefix_len prefix nodes (after its writes succeeded)."""
+        self._prefix_inner[:prefix_len] += 1
+        self.pending.append((phash_id, prefix_len))
+
+    def distances_after_prefix(self, perceptual_hash):
+        """
+        For one insert: index position -> distance, for the indexed nodes outside the prefix that share a matching
+        frame with the file (all other indexed nodes outside the prefix are at MAX_DISTANCE). None: not available.
+        """
+        if self.distance_index is None:
+            return None
+        sparse = self.distance_index.sparse_distances_for(perceptual_hash)
+        if sparse is None:
+            return None
+        positions, distances = sparse
+        if self._in_prefix_position is not None and len(positions):
+            outside = ~self._in_prefix_position[positions]
+            positions = positions[outside]
+            distances = distances[outside]
+        return dict(zip(positions.tolist(), distances.tolist()))
+
+    def is_prefix_position(self, position) -> bool:
+        return self._in_prefix_position is not None and bool(self._in_prefix_position[position])
+
+    def flush(self):
+        """
+        Write the deferred prefix inner_population increments (one UPDATE per node instead of one per node per file).
+        After this the tree rows are exactly what the original add_leaf() would have written. Called before every
+        commit (DedupeDb.commit) and when fast_tree_building() ends. All or nothing: on an error (or CTRL+C) the
+        partial writes are rolled back and the increments stay pending.
+        """
+        if not self.pending:
+            return
+        db = self.db
+        # Only files whose leaf row is still there count (a file whose own writes were rolled back does not).
+        counted = [
+            prefix_len
+            for (phash_id, prefix_len) in self.pending
+            if db.execute("SELECT 1 FROM shape_vptree WHERE phash_id = ?;", (phash_id,)).fetchone() is not None
+        ]
+        lost = len(counted) != len(self.pending)
+        if counted:
+            longest = max(counted)
+            files_per_length = np.bincount(np.array(counted, dtype=np.int64), minlength=longest + 1)
+            # prefix node k is counted once by every file whose prefix length is > k
+            increments = np.cumsum(files_per_length[::-1])[::-1][1:]
+            params = list(zip(increments.tolist(), self.prefix_ids[:longest]))
+            in_transaction = db.conn.in_transaction
+            if in_transaction:
+                db.execute("SAVEPOINT hvd_tree_flush;")
+            try:
+                db.cur.executemany(
+                    "UPDATE shape_vptree SET inner_population = inner_population + ? WHERE phash_id = ?;", params
+                )
+            except BaseException:
+                if in_transaction:
+                    db.execute("ROLLBACK TO hvd_tree_flush;")
+                    db.execute("RELEASE hvd_tree_flush;")
+                raise
+            if in_transaction:
+                db.execute("RELEASE hvd_tree_flush;")
+            else:
+                db.conn.commit()  # the files were committed without a flush; make the counts match them
+        self.pending = []
+        if lost:
+            # Some file's writes were undone after it was counted in memory: forget everything, re-read the tree.
+            self.nodes.clear()
+            self.reset_prefix()
+
+
+def flush_pending_tree_writes(db: DedupeDB.DedupeDb):
+    """Write any deferred fast tree building writes for `db` (see _FastInsertState.flush). Safe to call any time."""
+    state = _active_fast_insert
+    if state is not None and state.db is db:
+        state.flush()
+
 
 @contextlib.contextmanager
 def fast_tree_building(db: DedupeDB.DedupeDb):
     """While active, add_leaf() calls on `db` use the fast path. Yields True if the fast path is in use."""
     global _active_fast_insert
     state = None
-    if fast_insert_enabled():
+    if fast_insert_enabled() and np is not None:
         state = _FastInsertState(db)
         from hydrusvideodeduplicator.db.fast_search import SearchDistanceIndex
 
@@ -349,7 +535,17 @@ def fast_tree_building(db: DedupeDB.DedupeDb):
     try:
         yield state is not None
     finally:
-        _active_fast_insert = None
+        try:
+            if state is not None:
+                state.flush()
+        except BaseException:
+            # The deferred counts could not be written: undo the uncommitted files (they stay in the queue and
+            # are added again next run) so a commit can never save a tree with wrong counts.
+            with contextlib.suppress(Exception):
+                db.conn.rollback()
+            raise
+        finally:
+            _active_fast_insert = None
 
 
 class VpTreeManager:
@@ -381,6 +577,10 @@ class VpTreeManager:
         # Tree shape for the fast search scan (see enable_fast_search_scan). None means "walk the whole tree".
         self._search_scan_nodes = None
         self._search_scan_prefixes = {}
+        self._search_scan_prefix_orders = {}
+        self._search_scan_segments_cache = {}
+        self._search_scan_phashes = {}  # phash of unindexed nodes the fast walk met (same value the node cache holds)
+        self._search_scan_hash_phash = None  # hash_id -> phash_id while the fast search scan is in use
 
     def enable_fast_search_index(self) -> bool:
         """
@@ -400,6 +600,10 @@ class VpTreeManager:
         """
         self._search_scan_nodes = None
         self._search_scan_prefixes = {}
+        self._search_scan_prefix_orders = {}
+        self._search_scan_segments_cache = {}
+        self._search_scan_phashes = {}
+        self._search_scan_hash_phash = None
         if self._search_distance_index is None or np is None or not scan_search_enabled():
             return False
         try:
@@ -410,9 +614,22 @@ class VpTreeManager:
                     "SELECT phash_id, radius, inner_id, outer_id FROM shape_perceptual_hashes CROSS JOIN shape_vptree USING ( phash_id );"  # noqa: E501
                 )
             }
+            # search_file() looks up each file's phash_id with a query that has no index on hash_id (a full table
+            # scan per file). Read the map once instead. A hash_id with more than one row is left out, so it keeps
+            # using the original query (which returns whichever row SQLite finds first).
+            hash_phash = {}
+            repeated = set()
+            for hash_id, phash_id in self.db.execute("SELECT hash_id, phash_id FROM shape_perceptual_hash_map;"):
+                if hash_id in hash_phash:
+                    repeated.add(hash_id)
+                hash_phash[hash_id] = phash_id
+            for hash_id in repeated:
+                del hash_phash[hash_id]
+            self._search_scan_hash_phash = hash_phash
         except Exception as exc:  # never let the speedup break a run
             log.warning(f"Could not prepare the fast search scan, using the original search: {exc!r}")
             self._search_scan_nodes = None
+            self._search_scan_hash_phash = None
             return False
         return True
 
@@ -456,6 +673,208 @@ class VpTreeManager:
         prefix = (np.array(positions, dtype=np.intp), ids, node_id, unindexed) if ids else None
         self._search_scan_prefixes[key] = prefix
         return prefix
+
+    def _search_scan_prefix_order(self, search_radius):
+        """
+        For the prefix of _search_scan_prefix(search_radius): an int32 array giving, per index position, that node's
+        place in the prefix (-1 if it is not in the prefix). Unindexed prefix nodes are not in it. Cached like the
+        prefix itself.
+        """
+        key = (self._root_node_perceptual_hash_id, search_radius)
+        order = self._search_scan_prefix_orders.get(key)
+        if order is None:
+            prefix = self._search_scan_prefix(search_radius)
+            order = np.full(self._search_distance_index.num_nodes, -1, dtype=np.int32)
+            if prefix is not None:
+                positions, ids, _next_id, unindexed = prefix
+                indexed = np.ones(len(ids), dtype=bool)
+                indexed[[k for (k, _radius, _phash) in unindexed]] = False
+                order[positions[indexed]] = np.flatnonzero(indexed).astype(np.int32)
+            self._search_scan_prefix_orders[key] = order
+        return order
+
+    def _search_scan_segments(self, search_radius):
+        """
+        Runs of nodes outside the prefix that, like the prefix, every search with this radius walks straight through:
+        each has an inner child, no outer child and radius + search_radius >= MAX_DISTANCE, so the walk always goes
+        on to its inner child. Returns (segments, entry, segment per index position, place per index position):
+        segments[s] = (phash_ids in walk order, inner child of the last one, [(place, phash) of unindexed nodes]);
+        entry[phash_id] = (s, place). Cached per (root, radius).
+        """
+        key = (self._root_node_perceptual_hash_id, search_radius)
+        cached = self._search_scan_segments_cache.get(key)
+        if cached is not None:
+            return cached
+        nodes = self._search_scan_nodes
+        index = self._search_distance_index
+        position_of = index.position_of
+        prefix = self._search_scan_prefix(search_radius)
+        in_prefix = set(prefix[1]) if prefix is not None else set()
+        straight = set()
+        for phash_id, (radius, inner_id, outer_id) in nodes.items():
+            if (
+                phash_id not in in_prefix
+                and radius is not None
+                and inner_id is not None
+                and outer_id is None
+                and radius + search_radius >= MAX_DISTANCE
+            ):
+                straight.add(phash_id)
+        has_straight_parent = {nodes[phash_id][1] for phash_id in straight if nodes[phash_id][1] in straight}
+        segments = []
+        entry = {}
+        segment_of_position = np.full(index.num_nodes, -1, dtype=np.int32)
+        place_of_position = np.full(index.num_nodes, -1, dtype=np.int32)
+        for head in straight:
+            if head in has_straight_parent:
+                continue
+            ids = []
+            unindexed = []
+            phash_id = head
+            while phash_id in straight and phash_id not in entry:  # terminates: every node is taken once
+                place = len(ids)
+                entry[phash_id] = (len(segments), place)
+                position = position_of.get(phash_id)
+                if position is None:
+                    (phash,) = self.db.execute(
+                        "SELECT phash FROM shape_perceptual_hashes WHERE phash_id = ?;", (phash_id,)
+                    ).fetchone()  # same value the walk's node cache holds
+                    unindexed.append((place, phash))
+                else:
+                    segment_of_position[position] = len(segments)
+                    place_of_position[position] = place
+                ids.append(phash_id)
+                phash_id = nodes[phash_id][1]
+            segments.append((ids, phash_id, unindexed))
+        cached = (segments, entry, segment_of_position, place_of_position)
+        self._search_scan_segments_cache[key] = cached
+        return cached
+
+    def _search_one_scan(self, search_perceptual_hash, search_radius, similar_perceptual_hash_ids_to_distances):
+        """
+        The walk of search_perceptual_hashes() for one hash, with the same visits in the same order and the same
+        results, using the sparse distances of the fast index. Needs 0 < search_radius < MAX_DISTANCE, so that a node
+        with no matching frame (distance MAX_DISTANCE) is never a result. Returns (cycles, nodes searched), or None
+        (nothing changed; the caller then uses the original walk for this hash).
+
+        * The prefix (see _search_scan_prefix) is taken at once: its results are the prefix nodes with a matching
+          frame and distance <= search_radius, in prefix order.
+        * The rest of the tree is walked exactly like the original loop, but each step is a dict lookup instead of
+          node-cache bookkeeping and numpy scalar access.
+        """
+        index = self._search_distance_index
+        sparse = index.sparse_distances_for(search_perceptual_hash)
+        if sparse is None:
+            return None
+        positions, distances = sparse
+        nodes = self._search_scan_nodes
+        position_of = index.position_of
+        hits = []  # (phash_id, distance) in the order the original walk finds them
+        num_cycles = 0
+        total_nodes_searched = 0
+        prefix = self._search_scan_prefix(search_radius)
+        if prefix is None:
+            start_id = self._root_node_perceptual_hash_id
+            prefix_order = None
+        else:
+            _prefix_positions, prefix_ids, start_id, prefix_unindexed = prefix
+            prefix_order = self._search_scan_prefix_order(search_radius)
+            order = prefix_order[positions]
+            in_prefix = order >= 0
+            selected = in_prefix & (distances <= search_radius)
+            found = list(zip(order[selected].tolist(), distances[selected].tolist()))
+            for k, node_radius, node_perceptual_hash in prefix_unindexed:
+                node_hamming_distance = calculate_distance(search_perceptual_hash, node_perceptual_hash)
+                if node_hamming_distance > node_radius + search_radius:
+                    return None  # the walk would not continue past this node: original walk
+                if node_hamming_distance <= search_radius:
+                    found.append((k, node_hamming_distance))
+            found.sort()  # prefix order (each prefix place appears once)
+            hits.extend((prefix_ids[k], node_hamming_distance) for k, node_hamming_distance in found)
+            num_cycles += len(prefix_ids)
+            total_nodes_searched += len(prefix_ids)
+            outside = ~in_prefix
+            positions = positions[outside]
+            distances = distances[outside]
+
+        segments, segment_entry, segment_of_position, place_of_position = self._search_scan_segments(search_radius)
+        segment_of = segment_of_position[positions]
+        in_segment = segment_of >= 0
+        segment_hits = {}  # segment -> [(place, distance)] of its nodes with distance <= search_radius
+        matched = in_segment & (distances <= search_radius)
+        for segment, place, node_hamming_distance in zip(
+            segment_of[matched].tolist(), place_of_position[positions[matched]].tolist(), distances[matched].tolist()
+        ):
+            segment_hits.setdefault(segment, []).append((place, node_hamming_distance))
+        rest = dict(zip(positions[~in_segment].tolist(), distances[~in_segment].tolist()))
+
+        phashes = self._search_scan_phashes
+        next_potentials = [start_id]
+        while len(next_potentials) > 0:  # the original loop, step for step
+            current_potentials = next_potentials
+            next_potentials = []
+
+            num_cycles += 1
+            total_nodes_searched += len(current_potentials)
+
+            for node_perceptual_hash_id in current_potentials:
+                entry = segment_entry.get(node_perceptual_hash_id)
+                if entry is not None:
+                    # A straight run: the original walk visits each of its nodes in turn, then the inner child of
+                    # the last one. Same visits and same results; only the order among parallel branches differs,
+                    # which can't change the result (the smallest distance per node is kept).
+                    segment, first_place = entry
+                    segment_ids, segment_next, segment_unindexed = segments[segment]
+                    found = [hit for hit in segment_hits.get(segment, ()) if hit[0] >= first_place]
+                    for place, node_perceptual_hash in segment_unindexed:
+                        if place >= first_place:
+                            node_hamming_distance = calculate_distance(search_perceptual_hash, node_perceptual_hash)
+                            if node_hamming_distance <= search_radius:
+                                found.append((place, node_hamming_distance))
+                    found.sort()
+                    hits.extend((segment_ids[place], node_hamming_distance) for place, node_hamming_distance in found)
+                    total_nodes_searched += len(segment_ids) - first_place
+                    next_potentials.append(segment_next)
+                    continue
+                node = nodes.get(node_perceptual_hash_id)
+                if node is None:
+                    continue  # not in the tree tables: the original skips it too
+                node_radius, inner_perceptual_hash_id, outer_perceptual_hash_id = node
+
+                position = position_of.get(node_perceptual_hash_id)
+                if position is not None:
+                    if prefix_order is not None and prefix_order[position] >= 0:
+                        return None  # a loop back into the prefix: let the original walk handle it
+                    node_hamming_distance = rest.get(position, MAX_DISTANCE)
+                else:
+                    node_perceptual_hash = phashes.get(node_perceptual_hash_id)
+                    if node_perceptual_hash is None:
+                        (node_perceptual_hash,) = self.db.execute(
+                            "SELECT phash FROM shape_perceptual_hashes WHERE phash_id = ?;", (node_perceptual_hash_id,)
+                        ).fetchone()  # same value the walk's node cache holds
+                        phashes[node_perceptual_hash_id] = node_perceptual_hash
+                    node_hamming_distance = calculate_distance(search_perceptual_hash, node_perceptual_hash)
+
+                if node_hamming_distance <= search_radius:
+                    hits.append((node_perceptual_hash_id, node_hamming_distance))
+
+                if node_radius is not None:
+                    if inner_perceptual_hash_id is not None:
+                        if not node_hamming_distance > (node_radius + search_radius):
+                            next_potentials.append(inner_perceptual_hash_id)
+                    if outer_perceptual_hash_id is not None:
+                        if not (node_hamming_distance + search_radius) <= node_radius:
+                            next_potentials.append(outer_perceptual_hash_id)
+
+        for node_perceptual_hash_id, node_hamming_distance in hits:
+            current_distance = similar_perceptual_hash_ids_to_distances.get(node_perceptual_hash_id)
+            if current_distance is None:
+                similar_perceptual_hash_ids_to_distances[node_perceptual_hash_id] = node_hamming_distance
+            else:
+                similar_perceptual_hash_ids_to_distances[node_perceptual_hash_id] = min(
+                    node_hamming_distance, current_distance
+                )
+        return num_cycles, total_nodes_searched
 
     def add_leaf(self, perceptual_hash_id, perceptual_hash):
         state = _active_fast_insert
@@ -610,28 +1029,55 @@ class VpTreeManager:
         result = self.db.execute("SELECT phash_id FROM shape_vptree WHERE parent_id IS NULL;").fetchone()
 
         parent_id = None
-        ancestors_we_are_inside = []
+        ancestors_we_are_inside = []  # after the prefix
         ancestors_we_are_outside = []
         writes = []  # (sql, params) issued during the walk in the original, in the same order
         node_edits = []  # (node, field index, value): in-memory copy of those writes, applied after they succeed
+        prefix_len = 0  # number of prefix nodes this file walks through (their counts are written by state.flush)
+        # Deferring the prefix counts needs the transaction the caller commits (DedupeDb.commit flushes first).
+        defer_prefix = self.db.conn.in_transaction
 
         if result is not None:
             (root_node_perceptual_hash_id,) = result
-
-            fast_distances = None
-            fast_positions = None
-            if state.distance_index is not None:
-                fast_distances = state.distance_index.distances_for(perceptual_hash)
-                fast_positions = state.distance_index.position_of
 
             an_ancestor_is_unbalanced = False
 
             next_ancestor_id = root_node_perceptual_hash_id
 
+            if defer_prefix:
+                prefix_len = state.prefix_for(root_node_perceptual_hash_id)
+            elif state.prefix_root is not None:
+                state.flush()
+                state.nodes.clear()
+                state.reset_prefix()  # walk every node the original way; the prefix is rebuilt when possible
+            if prefix_len:
+                # The original walk at each prefix node: inside (inner_population + 1), balance check, inner child.
+                unbalanced = state.first_unbalanced_prefix_node(prefix_len)
+                if unbalanced is not None:
+                    writes.append(
+                        (
+                            "INSERT OR IGNORE INTO shape_maintenance_branch_regen ( phash_id ) VALUES ( ? );",
+                            (state.prefix_ids[unbalanced],),
+                        )
+                    )
+                    an_ancestor_is_unbalanced = True
+                next_ancestor_id = state.prefix_next
+
+            fast_distances = None  # index position -> distance, computed when first needed (see below)
+            fast_positions = state.distance_index.position_of if state.distance_index is not None else None
+
             while next_ancestor_id is not None:
                 ancestor_id = next_ancestor_id
 
-                node = state.get_node(ancestor_id)
+                node = None if ancestor_id in state.prefix_set else state.get_node(ancestor_id)
+
+                if node is None and ancestor_id in state.prefix_set:
+                    # Only possible if the tree has a loop back into the prefix: walk this run the original way.
+                    state.prefix_disabled = True
+                    state.flush()
+                    state.nodes.clear()
+                    state.reset_prefix()
+                    return self._add_leaf_fast(state, perceptual_hash_id, perceptual_hash)
 
                 if node is None:
                     if not self._reported_on_a_broken_branch:
@@ -659,10 +1105,15 @@ class VpTreeManager:
                 ) = node
 
                 distance_to_ancestor = None
-                if fast_distances is not None:
+                if fast_positions is not None:
                     fast_position = fast_positions.get(ancestor_id)
-                    if fast_position is not None:
-                        distance_to_ancestor = fast_distances[fast_position]
+                    if fast_position is not None and not state.is_prefix_position(fast_position):
+                        if fast_distances is None:
+                            fast_distances = state.distances_after_prefix(perceptual_hash)
+                            if fast_distances is None:
+                                fast_positions = None  # this file can't use the index: calculate_distance below
+                        if fast_distances is not None:
+                            distance_to_ancestor = fast_distances.get(fast_position, MAX_DISTANCE)
                 if distance_to_ancestor is None:
                     distance_to_ancestor = calculate_distance(perceptual_hash, ancestor_perceptual_hash)
 
@@ -752,7 +1203,12 @@ class VpTreeManager:
             state.nodes[ancestor_id][3] += 1
         for ancestor_id in ancestors_we_are_outside:
             state.nodes[ancestor_id][5] += 1
+        if prefix_len:
+            state.count_in_prefix(perceptual_hash_id, prefix_len)
+        state.extend_prefix()
 
+        if prefix_len and not self._node_caches_are_empty():
+            self.clear_perceptual_hashes_from_vptree_node_cache(state.prefix_ids[:prefix_len])
         self.clear_perceptual_hashes_from_vptree_node_cache(ancestors_we_are_inside)
         self.clear_perceptual_hashes_from_vptree_node_cache(ancestors_we_are_outside)
         self.clear_perceptual_hashes_from_vptree_node_cache((perceptual_hash_id,))
@@ -969,7 +1425,16 @@ class VpTreeManager:
 
                 return root_row
 
+    def _node_caches_are_empty(self) -> bool:
+        return (
+            not self._perceptual_hash_id_to_vp_tree_node_cache
+            and not self._non_vp_treed_perceptual_hash_ids
+            and self._root_node_perceptual_hash_id is None
+        )
+
     def clear_perceptual_hashes_from_vptree_node_cache(self, perceptual_hash_ids: Collection[int]):
+        if self._node_caches_are_empty():
+            return  # nothing to clear (e.g. the new manager made for every insert): same result, no loop
         for perceptual_hash_id in perceptual_hash_ids:
             if perceptual_hash_id in self._perceptual_hash_id_to_vp_tree_node_cache:
                 del self._perceptual_hash_id_to_vp_tree_node_cache[perceptual_hash_id]
@@ -1180,6 +1645,15 @@ class VpTreeManager:
             total_nodes_searched = 0
 
             for search_perceptual_hash in search_perceptual_hashes:
+                # Fastest path: sparse distances + fast walk, same visits and results (see _search_one_scan).
+                if self._search_scan_nodes is not None and search_radius < MAX_DISTANCE:
+                    counts = self._search_one_scan(
+                        search_perceptual_hash, search_radius, similar_perceptual_hash_ids_to_distances
+                    )
+                    if counts is not None:
+                        num_cycles += counts[0]
+                        total_nodes_searched += counts[1]
+                        continue
                 # Fast path: precompute this query's distance to every indexed node in one go (exact same values
                 # as calculate_distance). The tree walk below is unchanged; it just looks the value up.
                 fast_distances = None
@@ -1408,7 +1882,11 @@ class VpTreeManager:
         else:
             # Note: This is different than Hydrus. In Hydrus one file can have multiple perceptual hashes for some reason.   # noqa: E501
 
-            perceptual_hash_id = self.db.get_phash_id_from_hash_id(hash_id)
+            perceptual_hash_id = None
+            if self._search_scan_hash_phash is not None:
+                perceptual_hash_id = self._search_scan_hash_phash.get(hash_id)  # same value as the query below
+            if perceptual_hash_id is None:
+                perceptual_hash_id = self.db.get_phash_id_from_hash_id(hash_id)
             assert perceptual_hash_id is not None
 
             perceptual_hashes = [self.db.get_phash(perceptual_hash_id)]
