@@ -978,14 +978,6 @@ class HydrusVideoDeduplicator:
             else:
                 print_success("Finished maintenance.")
 
-        # Number of potential duplicates before adding more.
-        # This is just to print info for the user.
-        # Note: This will be inaccurate if the user searches for duplicates in the Hydrus client
-        #       while this is running.
-        pre_dedupe_count = 0
-        if not self.dry_run:
-            pre_dedupe_count = self.client.get_potential_duplicate_count_hydrus()
-
         print_user("\nTip: You can skip finding potential duplicates at any time by pressing CTRL+C.\n")
         self.db.begin_transaction()
         with self.db.conn:
@@ -997,7 +989,8 @@ class HydrusVideoDeduplicator:
             else:
                 search_finished = True
 
-        # Statistics for user
+        # Statistics for user. Use unique pairs this run found and sent, not Hydrus's total:
+        # that total can drop if pairs are resolved in Hydrus while this is running.
         if self.dry_run:
             path = self.dry_run_pairs_path
             if search_finished:
@@ -1005,12 +998,10 @@ class HydrusVideoDeduplicator:
             else:
                 print_success(dry_run_result_message(num_similar_pairs, path))
         else:
-            post_dedupe_count = self.client.get_potential_duplicate_count_hydrus()
-            new_dedupes_count = post_dedupe_count - pre_dedupe_count
             if search_finished:
-                print_success(finished_duplicates_message(new_dedupes_count))
+                print_success(finished_duplicates_message(num_similar_pairs))
             else:
-                print_success(duplicates_result_message(new_dedupes_count))
+                print_success(duplicates_result_message(num_similar_pairs))
 
         self.hydlog.info(f"{num_similar_pairs} similar file pairs found.")
         self.hydlog.info("Deduplication done.")
