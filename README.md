@@ -438,7 +438,7 @@ Failed files are sent to a Hydrus page named `failed` by default. Create a page 
 
 ## Thanks
 
-Thanks to **Rakaan** for finding and reporting bugs, testing this fork on his own large library, and pushing for features like `--dry-run`. He spotted the over-hashing bug fixed by `--rehash-overhashed`, and his first test run with `--dry-run` led to a faster pairs file.
+Thanks to **Rakaan** for finding and reporting bugs, testing this fork on his own large library, pushing for features like `--dry-run`, and providing detailed code reviews and optimization feedback. He spotted the over-hashing bug fixed by `--rehash-overhashed`, his first `--dry-run` test led to a faster pairs file, and his reviews directly drove lower peak RAM when building the search index as well as fixes to dry-run score reporting, mid-download error handling, Python 3.10/3.11 GUI compatibility, GPU fallback warnings, and CI test coverage.
 
 The original upstream README is collapsed below.
 
