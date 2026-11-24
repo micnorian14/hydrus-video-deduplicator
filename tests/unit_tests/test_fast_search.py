@@ -8,7 +8,16 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from hydrusvideodeduplicator.db import DedupeDB, vptree
-from hydrusvideodeduplicator.db.fast_search import SearchDistanceIndex, fast_search_enabled
+from hydrusvideodeduplicator.db import fast_search as fast_search_mod
+from hydrusvideodeduplicator.db.fast_search import (
+    FRAME_BYTES,
+    SearchDistanceIndex,
+    _BYTES_PER_FRAME,
+    _OFFSETS_BYTES,
+    _reachable_phash_ids,
+    estimated_peak_bytes,
+    fast_search_enabled,
+)
 
 
 def _frame(rng: random.Random) -> int:
@@ -129,6 +138,153 @@ class TestFastSearch(unittest.TestCase):
                 del os.environ["HVD_FAST_SEARCH"]
             else:
                 os.environ["HVD_FAST_SEARCH"] = old
+
+    def _db_with_hashes(self, tmpdir: str, hashes: list[bytes]) -> DedupeDB.DedupeDb:
+        db = DedupeDB.DedupeDb(Path(tmpdir), "videohashes.sqlite")
+        db.init_connection()
+        db.create_tables()
+        for i, phash in enumerate(hashes):
+            file_hash = f"{i:064x}"
+            db.add_file(file_hash)
+            db.add_perceptual_hash(phash)
+            db.associate_file_with_perceptual_hash(file_hash, phash)
+        db.commit()
+        return db
+
+    def _assert_indexes_identical(self, left: SearchDistanceIndex, right: SearchDistanceIndex):
+        import numpy as np
+
+        self.assertEqual(left.num_nodes, right.num_nodes)
+        self.assertEqual(left.num_frames, right.num_frames)
+        self.assertEqual(left.position_of, right.position_of)
+        np.testing.assert_array_equal(left._words, right._words)
+        np.testing.assert_array_equal(left._perm, right._perm)
+        np.testing.assert_array_equal(left._offsets, right._offsets)
+        np.testing.assert_array_equal(left._frame_owner, right._frame_owner)
+
+    def test_init_skips_empty_null_and_non_multiple_blobs(self):
+        import numpy as np
+
+        valid_a = _blob([_frame(random.Random(1))])
+        valid_b = _blob([_frame(random.Random(2)), _frame(random.Random(3))])
+        index = SearchDistanceIndex(
+            [10, 11, 12, 13, 14, 15],
+            [valid_a, b"", b"\x00" * 33, None, valid_b, b"\x00" * 31],  # type: ignore[list-item]
+        )
+        self.assertEqual(index.num_nodes, 2)
+        self.assertEqual(index.num_frames, 3)
+        self.assertEqual(index.position_of, {10: 0, 14: 1})
+        expected = SearchDistanceIndex([10, 14], [valid_a, valid_b])
+        self._assert_indexes_identical(index, expected)
+        got = index.sparse_distances_for(valid_a)
+        exp = expected.sparse_distances_for(valid_a)
+        np.testing.assert_array_equal(got[0], exp[0])
+        np.testing.assert_array_equal(got[1], exp[1])
+
+    def test_build_matches_direct_init_and_skips_invalid_hashes(self):
+        import numpy as np
+
+        hashes = [h for h in _make_hashes(seed=7) if h]
+        with TemporaryDirectory() as tmpdir:
+            db = self._db_with_hashes(tmpdir, hashes)
+            rows = db.execute("SELECT phash_id FROM shape_perceptual_hashes;").fetchall()
+            empty_id, bad_id, null_id = rows[0][0], rows[1][0], rows[2][0]
+            db.execute(
+                "UPDATE shape_perceptual_hashes SET phash = :phash WHERE phash_id = :phash_id",
+                {"phash": b"", "phash_id": empty_id},
+            )
+            db.execute(
+                "UPDATE shape_perceptual_hashes SET phash = :phash WHERE phash_id = :phash_id",
+                {"phash": b"\x00" * 33, "phash_id": bad_id},
+            )
+            db.execute(
+                "UPDATE shape_perceptual_hashes SET phash = :phash WHERE phash_id = :phash_id",
+                {"phash": None, "phash_id": null_id},
+            )
+            db.commit()
+
+            built = SearchDistanceIndex.build(db)
+            self.assertIsNotNone(built)
+
+            reachable = _reachable_phash_ids(db)
+            ids: list[int] = []
+            blobs: list[bytes] = []
+            for phash_id, typ, length, phash in db.execute(
+                "SELECT phash_id, typeof(phash), length(phash), phash FROM shape_perceptual_hashes;"
+            ):
+                if phash_id not in reachable:
+                    continue
+                if typ != "blob" or length is None or length <= 0 or length % FRAME_BYTES:
+                    continue
+                ids.append(int(phash_id))
+                blobs.append(phash)
+
+            # The two updated hashes and the NULL row must have been skipped.
+            self.assertNotIn(empty_id, built.position_of)
+            self.assertNotIn(bad_id, built.position_of)
+            self.assertNotIn(null_id, built.position_of)
+            self.assertEqual(len(ids), built.num_nodes)
+            self.assertGreater(built.num_nodes, 10)
+
+            direct = SearchDistanceIndex(ids, blobs)
+            self._assert_indexes_identical(built, direct)
+            mixed = SearchDistanceIndex([0, *ids, 999], [b"", *blobs, b"\x01" * 33])
+            self._assert_indexes_identical(mixed, direct)
+            for query in blobs[:8]:
+                got = built.sparse_distances_for(query)
+                exp = direct.sparse_distances_for(query)
+                np.testing.assert_array_equal(got[0], exp[0])
+                np.testing.assert_array_equal(got[1], exp[1])
+            db.close()
+
+    def test_offsets_and_perm_match_stable_searchsorted(self):
+        import numpy as np
+
+        rng = random.Random(0)
+        blobs = [_blob([_frame(rng) for _ in range(20)]) for _ in range(15)]
+        index = SearchDistanceIndex(list(range(len(blobs))), blobs)
+        all_values = np.arange(65537)
+        for w in range(4):
+            block_group = index._words[w].view(np.uint16).reshape(index.num_frames, 4)
+            for sub in range(4):
+                j = 4 * w + sub
+                column = block_group[:, sub]
+                order = np.argsort(column, kind="stable")
+                expected_offsets = np.searchsorted(column[order], all_values)
+                np.testing.assert_array_equal(index._perm[j], order)
+                np.testing.assert_array_equal(index._offsets[j], expected_offsets)
+
+    def test_peak_memory_guard_uses_construction_peak(self):
+        hashes = [h for h in _make_hashes() if h]
+        with TemporaryDirectory() as tmpdir:
+            db = self._db_with_hashes(tmpdir, hashes)
+            index = SearchDistanceIndex.build(db)
+            self.assertIsNotNone(index)
+            n = index.num_frames
+            peak = estimated_peak_bytes(n)
+            steady = n * _BYTES_PER_FRAME + _OFFSETS_BYTES
+            self.assertLess(steady, peak)
+            self.assertEqual(peak, n * (_BYTES_PER_FRAME + 16) + _OFFSETS_BYTES)
+
+            old_cap = fast_search_mod.MAX_INDEX_BYTES
+            try:
+                # Steady-state arrays fit, but the argsort scratch would exceed the cap.
+                fast_search_mod.MAX_INDEX_BYTES = (steady + peak) // 2
+                self.assertGreaterEqual(fast_search_mod.MAX_INDEX_BYTES, steady)
+                self.assertLess(fast_search_mod.MAX_INDEX_BYTES, peak)
+                self.assertIsNone(SearchDistanceIndex.build(db))
+
+                fast_search_mod.MAX_INDEX_BYTES = peak - 1
+                self.assertIsNone(SearchDistanceIndex.build(db))
+
+                # Equal to the estimated peak is allowed; the index must be identical.
+                fast_search_mod.MAX_INDEX_BYTES = peak
+                rebuilt = SearchDistanceIndex.build(db)
+                self.assertIsNotNone(rebuilt)
+                self._assert_indexes_identical(rebuilt, index)
+            finally:
+                fast_search_mod.MAX_INDEX_BYTES = old_cap
+            db.close()
 
 
 if __name__ == "__main__":

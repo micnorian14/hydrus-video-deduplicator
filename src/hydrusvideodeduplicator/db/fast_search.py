@@ -32,10 +32,13 @@ Each query only does work for the frames that share a (near-)equal block with it
 kept sparse (only the nodes with at least one matching frame; every other node is at the maximum distance 101).
 Nothing per query is proportional to the size of the library.
 
-Memory: about 100 bytes per indexed frame (the frames themselves plus 16 int32 lookup tables) plus ~8 MB.
-Only nodes reachable from the tree root are indexed, because the search can never visit any other node.
-The index is read-only, lives only for the duration of the search phase, and never touches the database
-except for reading.
+Memory: about 100 bytes per indexed frame (the frames themselves plus 16 int32 lookup tables) plus ~8 MB for
+the block-value offsets. Construction never holds a second full-size copy of the frames: they are written
+straight into the index, and the lookup tables are built from zero-copy views of those words. Peak construction
+memory is about 116 bytes per frame plus ~8 MB (the extra is a temporary argsort buffer). The index is refused
+if that peak would exceed MAX_INDEX_BYTES. Only nodes reachable from the tree root are indexed, because the
+search can never visit any other node. The index is read-only, lives only for the duration of the search phase,
+and never touches the database except for reading.
 
 Disable with the environment variable HVD_FAST_SEARCH=0 to get the original behaviour.
 """
@@ -63,11 +66,21 @@ MATCH_TOLERANCE = 31
 FRAME_BYTES = 32  # one PDQ hash = 256 bits
 _BLOCKS = 16  # 16 blocks of 16 bits; pigeonhole is valid because 16 * 2 = 32 > MATCH_TOLERANCE - 1 = 30
 
-# Refuse to build an index bigger than this (estimated). The search then simply uses the original code.
+# Refuse to build an index whose *peak construction* memory would exceed this. The search then uses the original code.
 MAX_INDEX_BYTES = 2_500_000_000
 _BYTES_PER_FRAME = FRAME_BYTES + 4 * _BLOCKS + 4  # frames + 16 int32 sorted-position tables + frame->node table
+_OFFSETS_LEN = 65537
+_OFFSETS_BYTES = _BLOCKS * _OFFSETS_LEN * 8  # 16 int64 offset tables, ~8.4 MB
+# Stable argsort of one 16-bit column: int64 order (~8 bytes/frame) plus a mergesort temp (~8 bytes/frame).
+_ARGSORT_SCRATCH_PER_FRAME = 16
+_PEAK_BYTES_PER_FRAME = _BYTES_PER_FRAME + _ARGSORT_SCRATCH_PER_FRAME
 # Largest distance (similarity 0), the distance of every node that shares no matching frame with the query.
 MAX_DISTANCE = 101  # == vptree.MAX_DISTANCE == vptree.fix_vpdq_similarity(0.0)
+
+
+def estimated_peak_bytes(total_frames: int) -> int:
+    """Peak RAM during index construction: steady-state arrays + argsort scratch + fixed offset tables."""
+    return total_frames * _PEAK_BYTES_PER_FRAME + _OFFSETS_BYTES
 
 
 def fast_search_enabled() -> bool:
@@ -102,39 +115,77 @@ def _reachable_phash_ids(db: DedupeDB.DedupeDb) -> set[int]:
     return seen
 
 
+def _usable_blob(blob) -> int | None:
+    """Return the frame count if `blob` is a non-empty multiple of FRAME_BYTES, otherwise None."""
+    if not isinstance(blob, (bytes, bytearray, memoryview)):
+        return None
+    length = len(blob)
+    if length == 0 or length % FRAME_BYTES:
+        return None
+    return length // FRAME_BYTES
+
+
 class SearchDistanceIndex:
     """Read-only in-memory index of the tree nodes' frame hashes. Build with SearchDistanceIndex.build(db)."""
 
     def __init__(self, phash_ids: list[int], blobs: list[bytes]):
-        lens = np.fromiter((len(b) // FRAME_BYTES for b in blobs), dtype=np.int64, count=len(phash_ids))
-        self._setup(phash_ids, lens, b"".join(blobs))
+        ids: list[int] = []
+        valid: list[bytes] = []
+        total_frames = 0
+        for pid, blob in zip(phash_ids, blobs):
+            k = _usable_blob(blob)
+            if k is None:
+                continue
+            ids.append(int(pid))
+            valid.append(blob)
+            total_frames += k
+        self._allocate_arrays(total_frames)
+        self._fill_from_blobs(valid)
+        self._finish(ids, total_frames)
 
-    def _setup(self, phash_ids: list[int], lens, joined: bytes):
-        n = len(phash_ids)
-        frames = np.frombuffer(joined, dtype=np.uint64).reshape(-1, 4)
-        num_frames = frames.shape[0]
-        self._num_frames = num_frames
-        # The frames, one row per 64-bit word: self._words[w][i] is word w of frame i. Stored by word so a candidate
-        # check can look at one word at a time and stop as soon as the hamming distance is already too large.
-        self._words = np.ascontiguousarray(frames.T)
-        # frame -> position of the node (video) it belongs to
-        self._frame_owner = np.repeat(np.arange(n, dtype=np.int32), lens)
-        self._num_nodes = n
-        # phash_id -> position in the distance list returned by distances_for()
+    def _allocate_arrays(self, total_frames: int) -> None:
+        self._words = np.empty((4, total_frames), dtype=np.uint64)
+        self._frame_owner = np.empty(total_frames, dtype=np.int32)
+
+    def _write_frames(self, blob, cursor: int, node_idx: int, k: int) -> int:
+        src = np.frombuffer(blob, dtype=np.uint64).reshape(k, 4).T
+        self._words[:, cursor : cursor + k] = src
+        self._frame_owner[cursor : cursor + k] = node_idx
+        return cursor + k
+
+    def _fill_from_blobs(self, blobs: list[bytes]) -> None:
+        cursor = 0
+        for node_idx, blob in enumerate(blobs):
+            k = len(blob) // FRAME_BYTES
+            cursor = self._write_frames(blob, cursor, node_idx, k)
+        if cursor != self._words.shape[1]:
+            raise ValueError("frame count mismatch while filling the search index")
+
+    def _finish(self, phash_ids: list[int], total_frames: int) -> None:
+        self._num_frames = total_frames
+        self._num_nodes = len(phash_ids)
         self.position_of = {int(pid): i for i, pid in enumerate(phash_ids)}
+        self._build_lookup_tables()
 
-        blocks = frames.view(np.uint16).reshape(num_frames, _BLOCKS)
+    def _build_lookup_tables(self) -> None:
+        num_frames = self._num_frames
         self._perm = np.empty((_BLOCKS, num_frames), dtype=np.int32)
-        self._offsets = np.empty((_BLOCKS, 65537), dtype=np.int64)
-        all_values = np.arange(65537)
-        for j in range(_BLOCKS):
-            column = blocks[:, j]
-            order = np.argsort(column, kind="stable")
-            self._perm[j] = order
-            # frames with block j == v are self._perm[j][self._offsets[j, v] : self._offsets[j, v + 1]]
-            self._offsets[j] = np.searchsorted(column[order], all_values)
-            del order
-        del blocks, frames
+        self._offsets = np.empty((_BLOCKS, _OFFSETS_LEN), dtype=np.int64)
+        for w in range(4):
+            # self._words[w] is a 1D contiguous uint64 array; viewing it as uint16 yields the 4 blocks of word w.
+            # block j = 4 * w + sub is a zero-copy view, identical to frames.view(uint16).reshape(N, 16)[:, j].
+            block_group = self._words[w].view(np.uint16).reshape(num_frames, 4)
+            for sub in range(4):
+                j = 4 * w + sub
+                column = block_group[:, sub]
+                # kind="stable" keeps self._perm bit-identical to the previous construction path.
+                order = np.argsort(column, kind="stable")
+                self._perm[j] = order
+                # frames with block j == v are self._perm[j][self._offsets[j, v] : self._offsets[j, v + 1]]
+                counts = np.bincount(column, minlength=65536)
+                self._offsets[j, 0] = 0
+                np.cumsum(counts, out=self._offsets[j, 1:])
+                del order
         self._flips = np.array([0] + [1 << k for k in range(16)], dtype=np.uint16)  # "same" + 16 one-bit flips
         self._rows = np.arange(_BLOCKS)[None, :, None]  # block index, broadcast over (frames, blocks, variants)
 
@@ -159,29 +210,43 @@ class SearchDistanceIndex:
             reachable = _reachable_phash_ids(db)
             if not reachable:
                 return None
+            # Pass 1: measure usable reachable hashes without loading any blob data into Python.
             phash_ids: list[int] = []
-            blobs: list[bytes] = []
-            total_bytes = 0
-            for phash_id, phash in db.execute("SELECT phash_id, phash FROM shape_perceptual_hashes;"):
+            frame_counts: list[int] = []
+            total_frames = 0
+            for phash_id, typ, length in db.execute(
+                "SELECT phash_id, typeof(phash), length(phash) FROM shape_perceptual_hashes;"
+            ):
                 if phash_id not in reachable:
                     continue
-                if not isinstance(phash, (bytes, bytearray)) or len(phash) == 0 or len(phash) % FRAME_BYTES:
-                    continue  # unusual hash: not indexed, the original C call handles it
-                phash_ids.append(phash_id)
-                blobs.append(bytes(phash))
-                total_bytes += len(phash)
-                if (total_bytes // FRAME_BYTES) * _BYTES_PER_FRAME > MAX_INDEX_BYTES:
+                if typ != "blob" or length is None or length <= 0 or length % FRAME_BYTES:
+                    continue
+                k = length // FRAME_BYTES
+                phash_ids.append(int(phash_id))
+                frame_counts.append(k)
+                total_frames += k
+                if estimated_peak_bytes(total_frames) > MAX_INDEX_BYTES:
                     log.warning("Fast search index would be too large; using the original search code.")
                     return None
             if not phash_ids:
                 return None
-            # Same as cls(phash_ids, blobs), but the separate blobs are freed before the index arrays are made.
-            lens = np.fromiter((len(b) // FRAME_BYTES for b in blobs), dtype=np.int64, count=len(phash_ids))
-            joined = b"".join(blobs)
-            del blobs
+            expected = {pid: k for pid, k in zip(phash_ids, frame_counts)}
+            # Pass 2: stream each blob straight into the pre-allocated index arrays (no blobs list, no join copy).
             index = cls.__new__(cls)
-            index._setup(phash_ids, lens, joined)
-            del joined
+            index._allocate_arrays(total_frames)
+            cursor = 0
+            node_idx = 0
+            for phash_id, phash in db.execute("SELECT phash_id, phash FROM shape_perceptual_hashes;"):
+                k = expected.get(phash_id)
+                if k is None:
+                    continue
+                if not isinstance(phash, (bytes, bytearray, memoryview)) or len(phash) != k * FRAME_BYTES:
+                    raise ValueError(f"phash_id {phash_id} changed during fast search index construction")
+                cursor = index._write_frames(phash, cursor, node_idx, k)
+                node_idx += 1
+            if cursor != total_frames or node_idx != len(phash_ids):
+                raise ValueError("shape_perceptual_hashes changed during fast search index construction")
+            index._finish(phash_ids, total_frames)
             log.info(
                 f"Fast search index: {index.num_nodes} nodes, {index.num_frames} frames, "
                 f"{index.nbytes() / 1e6:.0f} MB, built in {time.perf_counter() - start:.1f}s"
