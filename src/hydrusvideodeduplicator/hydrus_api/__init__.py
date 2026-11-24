@@ -52,6 +52,28 @@ class BinaryFileLike(T.Protocol):
     def read(self) -> bytes: ...
 
 
+# Request timeouts in seconds: (connect, read). The read timeout is the longest wait for the next bytes of a
+# response, not for the whole response, so large streamed downloads aren't cut off; it only stops a stalled Hydrus
+# from hanging the program forever. HVD_HYDRUS_TIMEOUT sets the read timeout (0 = wait forever, the old behaviour).
+CONNECT_TIMEOUT = 10.0
+DEFAULT_READ_TIMEOUT = 600.0
+
+
+def default_timeout() -> T.Tuple[float, T.Optional[float]]:
+    """(connect, read) timeout for requests, from HVD_HYDRUS_TIMEOUT (read seconds) or the defaults."""
+    value = os.environ.get("HVD_HYDRUS_TIMEOUT", "").strip()
+    read: T.Optional[float] = DEFAULT_READ_TIMEOUT
+    if value:
+        try:
+            read = float(value)
+        except ValueError:
+            warnings.warn(f"Ignoring invalid HVD_HYDRUS_TIMEOUT={value!r}; using {DEFAULT_READ_TIMEOUT:g} seconds.")
+        else:
+            if read <= 0:
+                read = None
+    return (CONNECT_TIMEOUT, read)
+
+
 class HydrusAPIException(Exception):
     pass
 
@@ -349,6 +371,7 @@ class Client:
         api_url: str = DEFAULT_API_URL,
         session: T.Optional[requests.Session] = None,
         verify_cert: T.Optional[str] = None,  # Path to cert
+        timeout: T.Any = None,  # requests timeout; None = default_timeout()
     ) -> None:
         """
         See https://hydrusnetwork.github.io/hydrus/client_api.html for documentation.
@@ -358,6 +381,7 @@ class Client:
         self.api_url = api_url.rstrip("/")
         self._verify_cert = verify_cert
         self.session = session or requests.Session()
+        self.timeout = default_timeout() if timeout is None else timeout
 
     def _api_request(self, method: str, path: str, **kwargs: T.Any) -> requests.Response:
         if self.access_key is not None:
@@ -376,6 +400,7 @@ class Client:
             requests.packages.urllib3.disable_warnings()
         else:
             kwargs["verify"] = self._verify_cert
+        kwargs.setdefault("timeout", self.timeout)
 
         try:
             response = self.session.request(method, self.api_url + path, **kwargs)

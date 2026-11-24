@@ -56,6 +56,10 @@ from hydrusvideodeduplicator.dedup import (
 )
 from hydrusvideodeduplicator.gui import stylesheet
 
+# How long closing the window waits for the worker to stop on its own before forcing it (a forced stop can cut off
+# a database write, so it is only a last resort).
+WORKER_STOP_TIMEOUT_MS = 60_000
+
 
 @dataclass
 class HydrusRequestParameters:
@@ -109,7 +113,10 @@ class Worker(QObject):
         self.progress_updated.emit(progress)
 
     def should_skip_step(self) -> bool:
-        return self.should_skip_step_semaphore.available() == 0
+        if self.should_skip_step_semaphore.available() == 0:
+            return True
+        thread = self.thread()  # the worker thread; asked to stop when the window closes
+        return thread is not None and thread.isInterruptionRequested()
 
     @Slot(int)
     def dedupe_connection(self, request_params: HydrusRequestParameters, dedupe_params: DedupeParameters):
@@ -672,9 +679,12 @@ If you change this value you should clear the search cache. This isn't cleared a
 
         try:
             if self.worker_thread is not None and self.worker_thread.isRunning():
+                # Ask the worker to stop at its next check (the skip flag above, and the interruption request), then
+                # end the thread's event loop once its current task returns, so it is never cut off mid-write.
+                self.worker_thread.requestInterruption()
                 self.worker_thread.quit()
-                if not self.worker_thread.wait(10000):
-                    # Force stop.
+                if not self.worker_thread.wait(WORKER_STOP_TIMEOUT_MS):
+                    # Last resort only: the worker ignored the stop request for WORKER_STOP_TIMEOUT_MS.
                     print_and_log(
                         self.logger, "Worker thread did not stop in time. Forcing it to stop.", logging.WARNING
                     )

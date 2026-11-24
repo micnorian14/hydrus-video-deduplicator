@@ -46,6 +46,25 @@ def calculate_distance(phash_a: bytes, phash_b: bytes) -> int:
 MAX_DISTANCE = fix_vpdq_similarity(0.0)
 
 
+class DamagedSearchTreeError(RuntimeError):
+    """The search tree links back into itself (a loop in a damaged database), so a walk of it would never end."""
+
+    def __init__(self, detail: str):
+        super().__init__(
+            f"The search tree is damaged ({detail}). Run once with --relink-search-tree to repair it "
+            "(your database is backed up automatically), or reset it with --clear-search-tree."
+        )
+
+
+def walk_node_limit(tree_nodes: int) -> int:
+    """
+    More node visits than one search walk of an undamaged tree can count: every node once, plus once more for the
+    first node of each straight run the fast scan takes at once, plus links to missing nodes (at most n + 1), plus
+    the root. A walk that goes past this is going around a loop.
+    """
+    return 3 * tree_nodes + 2
+
+
 def chain_tree_rows(perceptual_hash_ids: list[int]) -> list[tuple]:
     """
     shape_vptree rows that link the given phash_ids into one chain: each node's only child is the next id.
@@ -581,6 +600,7 @@ class VpTreeManager:
         self._search_scan_segments_cache = {}
         self._search_scan_phashes = {}  # phash of unindexed nodes the fast walk met (same value the node cache holds)
         self._search_scan_hash_phash = None  # hash_id -> phash_id while the fast search scan is in use
+        self._walk_node_limit = 0  # walk_node_limit() of the tree size last counted (recounted when exceeded)
 
     def enable_fast_search_index(self) -> bool:
         """
@@ -809,6 +829,7 @@ class VpTreeManager:
         rest = dict(zip(positions[~in_segment].tolist(), distances[~in_segment].tolist()))
 
         phashes = self._search_scan_phashes
+        node_limit = walk_node_limit(len(nodes))
         next_potentials = [start_id]
         while len(next_potentials) > 0:  # the original loop, step for step
             current_potentials = next_potentials
@@ -816,6 +837,8 @@ class VpTreeManager:
 
             num_cycles += 1
             total_nodes_searched += len(current_potentials)
+            if total_nodes_searched > node_limit:
+                raise DamagedSearchTreeError(f"a search visited more than {node_limit} nodes, so it has a loop")
 
             for node_perceptual_hash_id in current_potentials:
                 entry = segment_entry.get(node_perceptual_hash_id)
@@ -901,9 +924,13 @@ class VpTreeManager:
             an_ancestor_is_unbalanced = False
 
             next_ancestor_id = root_node_perceptual_hash_id
+            walked = set()
 
             while next_ancestor_id is not None:
                 ancestor_id = next_ancestor_id
+                if ancestor_id in walked:
+                    raise DamagedSearchTreeError(f"node {ancestor_id} links back to one of its ancestors")
+                walked.add(ancestor_id)
 
                 result = self.db.execute(
                     "SELECT phash, radius, inner_id, inner_population, outer_id, outer_population FROM shape_perceptual_hashes NATURAL JOIN shape_vptree WHERE phash_id = ?;",  # noqa: E501
@@ -1066,8 +1093,12 @@ class VpTreeManager:
             fast_distances = None  # index position -> distance, computed when first needed (see below)
             fast_positions = state.distance_index.position_of if state.distance_index is not None else None
 
+            walked = set()
             while next_ancestor_id is not None:
                 ancestor_id = next_ancestor_id
+                if ancestor_id in walked:
+                    raise DamagedSearchTreeError(f"node {ancestor_id} links back to one of its ancestors")
+                walked.add(ancestor_id)
 
                 node = None if ancestor_id in state.prefix_set else state.get_node(ancestor_id)
 
@@ -1658,6 +1689,7 @@ class VpTreeManager:
                 # as calculate_distance). The tree walk below is unchanged; it just looks the value up.
                 fast_distances = None
                 fast_positions = None
+                walk_start = total_nodes_searched
                 next_potentials = [self._root_node_perceptual_hash_id]
                 if self._search_distance_index is not None:
                     fast_positions = self._search_distance_index.position_of
@@ -1702,6 +1734,8 @@ class VpTreeManager:
 
                     num_cycles += 1
                     total_nodes_searched += len(current_potentials)
+                    if total_nodes_searched - walk_start > self._walk_node_limit:
+                        self._check_walk_length(total_nodes_searched - walk_start)
 
                     # this is no longer an iterable inside the main node SELECT because it was causing crashes on linux!!  # noqa: E501
                     # after investigation, it seemed to be SQLite having a problem with part of Get64BitHammingDistance touching perceptual_hashes it presumably was still hanging on to  # noqa: E501
@@ -1899,6 +1933,13 @@ class VpTreeManager:
         similar_hash_ids_and_distances = dedupe_list(similar_hash_ids_and_distances)
 
         return similar_hash_ids_and_distances
+
+    def _check_walk_length(self, nodes_visited: int) -> None:
+        """Raise DamagedSearchTreeError if one search walk visited more nodes than an undamaged tree allows."""
+        (tree_nodes,) = self.db.execute("SELECT COUNT(*) FROM shape_vptree;").fetchone()
+        self._walk_node_limit = walk_node_limit(tree_nodes)
+        if nodes_visited > self._walk_node_limit:
+            raise DamagedSearchTreeError(f"a search visited more than {self._walk_node_limit} nodes, so it has a loop")
 
     def maintenance_due(self) -> bool:
         """Whether there are unbalanced branches waiting to be rebuilt."""

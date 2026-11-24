@@ -374,6 +374,11 @@ def dry_run_finished_message(n: int, path: Path) -> str:
     return f"Finished finding potential duplicates. {dry_run_result_message(n, path)}"
 
 
+def unordered_pair(file_hash_a: str, file_hash_b: str) -> tuple[str, str]:
+    """The same key for (a, b) and (b, a), so a pair found from both of its files is counted once."""
+    return (file_hash_a, file_hash_b) if file_hash_a <= file_hash_b else (file_hash_b, file_hash_a)
+
+
 def new_dry_run_pairs_path(db_dir: Path) -> Path:
     return Path(db_dir) / f"dry_run_pairs-{time.strftime('%Y%m%d-%H%M%S')}.jsonl"
 
@@ -1189,7 +1194,7 @@ class HydrusVideoDeduplicator:
         """
         if send is None:
             send = self.mark_videos_as_duplicates
-        num_similar_pairs = 0
+        found_pairs = set()  # unordered pairs sent; a pair found from both files counts once
         processed_count = 0
         COMMIT_BATCH_SIZE = 64
         todo: queue.Queue = queue.Queue(maxsize=PIPELINE_DEPTH)
@@ -1230,13 +1235,13 @@ class HydrusVideoDeduplicator:
 
             def apply_done():
                 # Main thread: the original loop's per-file DB writes, for files whose Hydrus calls all succeeded.
-                nonlocal num_similar_pairs, processed_count
+                nonlocal processed_count
                 while True:
                     try:
                         hash_id, pairs = done.get_nowait()
                     except queue.Empty:
                         return
-                    num_similar_pairs += len(pairs)
+                    found_pairs.update(unordered_pair(a, b) for a, b in pairs)
                     self._update_search_cache(search_threshold, hash_id)
                     processed_count += 1
                     if processed_count % COMMIT_BATCH_SIZE == 0:
@@ -1302,7 +1307,7 @@ class HydrusVideoDeduplicator:
                     stop.set()
                     apply_done()
                 raise
-        return num_similar_pairs // 2
+        return len(found_pairs)
 
     def _ensure_dry_run_writer(self) -> DryRunPairWriter:
         writer = getattr(self, "dry_run_writer", None)
@@ -1512,7 +1517,7 @@ class HydrusVideoDeduplicator:
         """The original search loop: Hydrus calls one after another on this thread (used with HVD_PIPELINE=0)."""
         if send is None:
             send = self.mark_videos_as_duplicates
-        num_similar_pairs = 0
+        found_pairs = set()  # unordered pairs found; a pair found from both files counts once
         with ProgressBar(
             smoothing=TQDM_SMOOTHING,
             dynamic_ncols=True,
@@ -1540,7 +1545,7 @@ class HydrusVideoDeduplicator:
                             send(file_hash_a, file_hash_b, distance)
                         else:
                             send(file_hash_a, file_hash_b)
-                        num_similar_pairs += 1
+                        found_pairs.add(unordered_pair(file_hash_a, file_hash_b))
 
                 # TODO:
                 # Do we need to add the below line here? See _PerceptualHashesSearchForPotentialDuplicates in Hydrus.
@@ -1557,4 +1562,4 @@ class HydrusVideoDeduplicator:
                 pbar.update(1)
                 if self.update_progress_callback:
                     self.update_progress_callback(SearchingForDuplicatesProgress(complete=pbar.n, total=pbar.total))
-        return num_similar_pairs // 2
+        return len(found_pairs)

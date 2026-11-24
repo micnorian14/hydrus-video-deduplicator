@@ -76,6 +76,10 @@ _ARGSORT_SCRATCH_PER_FRAME = 16
 _PEAK_BYTES_PER_FRAME = _BYTES_PER_FRAME + _ARGSORT_SCRATCH_PER_FRAME
 # Largest distance (similarity 0), the distance of every node that shares no matching frame with the query.
 MAX_DISTANCE = 101  # == vptree.MAX_DISTANCE == vptree.fix_vpdq_similarity(0.0)
+# Bounds on per-query scratch memory (results are the same whatever these are):
+_QUERY_FRAME_CHUNK = 1024  # query frames looked up at once (lookup arrays: ~6.7 MB per 1024 frames)
+_CANDIDATE_CHUNK = 1 << 20  # candidate frames checked at once for one query frame (~25 MB of temporaries)
+_MAX_PENDING_HITS = 1 << 22  # matched (frame, node) entries held before they are merged into per-node counts
 
 
 def estimated_peak_bytes(total_frames: int) -> int:
@@ -293,48 +297,102 @@ class SearchDistanceIndex:
     def _sparse_distances(self, query: bytes):
         q = np.frombuffer(query, dtype=np.uint64).reshape(-1, 4)
         num_query_frames = q.shape[0]
-        query_blocks = q.view(np.uint16).reshape(num_query_frames, _BLOCKS)
-        # For every query frame, block and variant ("same" or one bit flipped): the slice of the sorted table.
-        keys = (query_blocks[:, :, None] ^ self._flips[None, None, :]).astype(np.intp)  # (frames, 16, 17)
-        starts = self._offsets[self._rows, keys].reshape(num_query_frames, -1)
-        lengths = self._offsets[self._rows, keys + 1].reshape(num_query_frames, -1) - starts
         variants = self._flips.shape[0]
-        words = self._words
-        hit_keys = []  # per query frame: node position * num_query_frames + frame, for every node it matches
-        for f in range(num_query_frames):
-            nonempty = np.flatnonzero(lengths[f])
-            if len(nonempty) == 0:
-                continue
-            candidates = np.concatenate(
-                [
-                    self._perm[j, a : a + n]
-                    for j, a, n in zip(
-                        (nonempty // variants).tolist(), starts[f, nonempty].tolist(), lengths[f, nonempty].tolist()
-                    )
-                ]
-            )
-            # Full 256-bit hamming distance, one 64-bit word at a time. A candidate is dropped as soon as the
-            # distance of the words seen so far is >= MATCH_TOLERANCE; the remaining words can only add to it,
-            # so exactly the frames with total distance < MATCH_TOLERANCE are kept.
-            query_words = [np.uint64(int(w)) for w in q[f]]
-            distance = None
-            for w in range(4):
-                bits = words[w].take(candidates)
-                np.bitwise_xor(bits, query_words[w], out=bits)
-                distance = np.bitwise_count(bits) if distance is None else distance + np.bitwise_count(bits)
-                keep = np.flatnonzero(distance < MATCH_TOLERANCE)
-                if len(keep) == 0:
-                    break
-                if len(keep) < len(candidates):
-                    candidates = candidates[keep]
-                    distance = distance[keep]
-            else:
-                # each query frame counts at most once per node, like the C code
-                owners = np.unique(self._frame_owner[candidates]).astype(np.int64)
-                hit_keys.append(owners * num_query_frames + f)
-        if not hit_keys:
+        # Matched node positions, one entry per (query frame, node) match: each query frame lists a node at most
+        # once. Counted (and, for very large queries, merged into counts as it grows) at the end.
+        hit_chunks = []
+        pending_hits = 0
+        merged = None  # (positions, counts) of the hits merged so far, only used for very large queries
+        # Query frames are looked up in chunks so the (frames, 16, 17) lookup arrays stay small for long videos.
+        for first in range(0, num_query_frames, _QUERY_FRAME_CHUNK):
+            chunk = q[first : first + _QUERY_FRAME_CHUNK]
+            chunk_frames = chunk.shape[0]
+            query_blocks = chunk.view(np.uint16).reshape(chunk_frames, _BLOCKS)
+            # For every query frame, block and variant ("same" or one bit flipped): the slice of the sorted table.
+            keys = (query_blocks[:, :, None] ^ self._flips[None, None, :]).astype(np.intp)  # (frames, 16, 17)
+            starts = self._offsets[self._rows, keys].reshape(chunk_frames, -1)
+            lengths = self._offsets[self._rows, keys + 1].reshape(chunk_frames, -1) - starts
+            del keys
+            totals = lengths.sum(axis=1).tolist()
+            for f in range(chunk_frames):
+                if totals[f] == 0:
+                    continue
+                nonempty = np.flatnonzero(lengths[f])
+                slices = zip(
+                    (nonempty // variants).tolist(), starts[f, nonempty].tolist(), lengths[f, nonempty].tolist()
+                )
+                query_words = [np.uint64(int(w)) for w in chunk[f]]
+                if totals[f] <= _CANDIDATE_CHUNK:
+                    candidates = np.concatenate([self._perm[j, a : a + n] for j, a, n in slices])
+                    matched = self._matching_frames(candidates, query_words)
+                    if len(matched) == 0:
+                        continue
+                    # each query frame counts at most once per node, like the C code
+                    owners = np.unique(self._frame_owner[matched])
+                else:
+                    # Very many candidates (e.g. one frame repeated across the library; a frame can be listed by
+                    # up to all 16 tables): check them in bounded pieces. Same frames are checked, so the same
+                    # nodes match.
+                    pieces = []
+                    for j, a, n in slices:
+                        for piece_start in range(a, a + n, _CANDIDATE_CHUNK):
+                            piece = self._perm[j, piece_start : min(piece_start + _CANDIDATE_CHUNK, a + n)]
+                            matched = self._matching_frames(piece, query_words)
+                            if len(matched):
+                                pieces.append(np.unique(self._frame_owner[matched]))
+                    if not pieces:
+                        continue
+                    owners = np.unique(np.concatenate(pieces))
+                    del pieces
+                hit_chunks.append(owners)
+                pending_hits += len(owners)
+                if pending_hits > _MAX_PENDING_HITS:
+                    merged = _merge_hit_counts(merged, hit_chunks)
+                    hit_chunks = []
+                    pending_hits = 0
+        if hit_chunks or merged is not None:
+            merged = _merge_hit_counts(merged, hit_chunks)
+        if merged is None or len(merged[0]) == 0:
             empty = np.empty(0, dtype=np.int64)
             return empty, empty
-        positions, matched_frames = np.unique(np.concatenate(hit_keys) // num_query_frames, return_counts=True)
+        positions, matched_frames = merged
         similarity = (matched_frames.astype(np.int64) * 100) // num_query_frames  # exact integer floor(100 * m / n)
         return positions.astype(np.int64), (100 - similarity) + 1  # within [1, 101] because 0 <= similarity <= 100
+
+    def _matching_frames(self, candidates, query_words):
+        """
+        The candidate frame indices at full 256-bit hamming distance < MATCH_TOLERANCE from the query frame.
+        One 64-bit word at a time: a candidate is dropped as soon as the distance of the words seen so far is
+        >= MATCH_TOLERANCE; the remaining words can only add to it, so exactly the frames with total distance
+        < MATCH_TOLERANCE are kept.
+        """
+        words = self._words
+        distance = None
+        for w in range(4):
+            bits = words[w].take(candidates)
+            np.bitwise_xor(bits, query_words[w], out=bits)
+            distance = np.bitwise_count(bits) if distance is None else distance + np.bitwise_count(bits)
+            keep = np.flatnonzero(distance < MATCH_TOLERANCE)
+            if len(keep) == 0:
+                return candidates[:0]
+            if len(keep) < len(candidates):
+                candidates = candidates[keep]
+                distance = distance[keep]
+        return candidates
+
+
+def _merge_hit_counts(merged, hit_chunks):
+    """Fold per-query-frame node lists into (positions ascending, number of query frames matching each)."""
+    if hit_chunks:
+        positions, counts = np.unique(np.concatenate(hit_chunks), return_counts=True)
+    else:
+        positions = np.empty(0, dtype=np.int32)
+        counts = np.empty(0, dtype=np.int64)
+    if merged is None:
+        return positions, counts.astype(np.int64)
+    all_positions = np.concatenate([merged[0], positions])
+    all_counts = np.concatenate([merged[1], counts.astype(np.int64)])
+    positions, inverse = np.unique(all_positions, return_inverse=True)
+    totals = np.zeros(len(positions), dtype=np.int64)
+    np.add.at(totals, inverse, all_counts)
+    return positions, totals

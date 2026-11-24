@@ -142,7 +142,7 @@ class TestSkipRepeatPairs(unittest.TestCase):
         for pipeline in (False, True):
             path, rec, result, printed = self._off(pipeline)
             self.assertEqual(rec.calls, reference)  # same calls, same order
-            self.assertEqual(result, len(reference) // 2)
+            self.assertEqual(result, len(_pairs(reference)))  # unique pairs, one-way matches included
             self.assertNotIn("Skipping repeat pair sends", printed)
             self.assertNotIn("repeat pair sends", printed)
             self.assertNotIn("WARNING:", printed)  # warning is at startup, not here
