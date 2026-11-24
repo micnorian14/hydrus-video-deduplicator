@@ -27,6 +27,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 import hydrusvideodeduplicator.hydrus_api as hydrus_api
+import requests
 
 from .client import HVDClient
 from .db import DedupeDB, vptree
@@ -427,12 +428,12 @@ class DryRunPairWriter:
         key = (hash_a, hash_b) if hash_a <= hash_b else (hash_b, hash_a)
         existing = self._pairs.get(key)
         if existing is None:
-            # First time this pair is seen: both score fields get this score until the other direction arrives.
+            # First time this pair is seen: leave the reverse score unset until the other direction is recorded.
             rec = {
                 "file_a": hash_a,
                 "file_b": hash_b,
                 "score_a_to_b": score,
-                "score_b_to_a": score,
+                "score_b_to_a": None,
             }
             self._pairs[key] = rec
             self._order.append(key)
@@ -444,8 +445,6 @@ class DryRunPairWriter:
                 self._dirty = True
         elif hash_a == existing["file_a"] and hash_b == existing["file_b"] and existing["score_a_to_b"] is None:
             existing["score_a_to_b"] = score
-            if existing["score_b_to_a"] is None:
-                existing["score_b_to_a"] = score
             self._dirty = True
 
     def _rewrite(self) -> None:
@@ -532,11 +531,15 @@ class FileHasher:
         self.gpu_decode = gpu_decode
 
     def _fetch_file(self, file_hash: str):
+        response = None
         try:
             response = self.client.client.get_file(hash_=file_hash)
-        except hydrus_api.HydrusAPIException as exc:
+            return response.content
+        except (hydrus_api.HydrusAPIException, requests.RequestException) as exc:
             raise HydrusApiException(exc)
-        return response.content
+        finally:
+            if response is not None:
+                response.close()
 
     def _phash_file(self, file: bytes, gpu_decode: bool | None = None) -> bytes:
         if gpu_decode is None:

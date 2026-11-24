@@ -262,5 +262,23 @@ class TestAutoPipelineSafeguards(unittest.TestCase):
         dedup._join_threads(joins[0].args[1], 5.0)
 
 
+class TestGpuFallbackWarning(unittest.TestCase):
+    def test_gpu_fallback_warning_is_logged(self):
+        dummy_hash = object()
+
+        def _hash_video_bytes(video, num_threads, gpu_decode):
+            if gpu_decode:
+                raise RuntimeError("nvdec failed")
+            return dummy_hash
+
+        with mock.patch.object(Vpdq, "_hash_video_bytes", staticmethod(_hash_video_bytes)):
+            with self.assertLogs("hydrusvideodeduplicator.vpdqpy", level="WARNING") as cm:
+                result = Vpdq.computeHash(b"fake-video-bytes", gpu_decode=True)
+        self.assertIs(result, dummy_hash)
+        self.assertTrue(
+            any("GPU decode failed, falling back to CPU decode: nvdec failed" in message for message in cm.output)
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

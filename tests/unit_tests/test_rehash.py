@@ -50,6 +50,9 @@ class _Response:
     def __init__(self, content: bytes):
         self.content = content
 
+    def close(self):
+        pass
+
 
 class _ReadOnlyHydrus:
     """Only the two GET calls --rehash-overhashed may use. Any other call fails the test (AttributeError)."""

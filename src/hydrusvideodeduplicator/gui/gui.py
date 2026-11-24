@@ -778,10 +778,14 @@ If you change this value you should clear the search cache. This isn't cleared a
     @ignore_after_close
     def dedupe_completed_callback(self, dedupe_completed_result: str | None, exc: Exception | None):
         self.deduplicate_btn.setEnabled(True)
+        if isinstance(exc, ClientAPIException):
+            error_text = exc.pretty_msg + "\n\nException:\n" + str(exc)
+        else:
+            error_text = exc
         result_msg = (
             f"Deduplication was successful!\nNumber of similar pairs found: {dedupe_completed_result}\nOpen the Hydrus duplicates processing page to process any potential duplicate pairs."  # noqa: E501
             if dedupe_completed_result
-            else f"Deduplication failed.\nError: {exc.pretty_msg + '\n\nException:\n' + str(exc) if isinstance(exc, ClientAPIException) else exc}"  # noqa: E501
+            else f"Deduplication failed.\nError: {error_text}"
         )
         if not dedupe_completed_result:
             print_and_log(self.logger, result_msg, logging.ERROR)

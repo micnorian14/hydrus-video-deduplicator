@@ -120,6 +120,43 @@ class TestDryRun(unittest.TestCase):
             },
         )
 
+    def test_writer_unmeasured_reverse_score_is_null(self):
+        path = Path(self.tmp.name) / "dry_run_pairs-oneway.jsonl"
+        writer = dedup.DryRunPairWriter(path)
+        try:
+            writer.record("a" * 64, "b" * 64, distance=1)
+            rows = _read_pairs(path)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["score_a_to_b"], 100.0)
+            self.assertIsNone(rows[0]["score_b_to_a"])
+
+            writer.record("b" * 64, "a" * 64, distance=76)
+        finally:
+            writer.close()
+        self.assertEqual(
+            _read_pairs(path),
+            [
+                {
+                    "file_a": "a" * 64,
+                    "file_b": "b" * 64,
+                    "score_a_to_b": 100.0,
+                    "score_b_to_a": 25.0,
+                }
+            ],
+        )
+
+    def test_writer_forward_fill_does_not_copy_into_reverse(self):
+        path = Path(self.tmp.name) / "dry_run_pairs-forward-fill.jsonl"
+        writer = dedup.DryRunPairWriter(path)
+        try:
+            writer.record("a" * 64, "b" * 64, distance=None)
+            writer.record("a" * 64, "b" * 64, distance=1)
+        finally:
+            writer.close()
+        rows = _read_pairs(path)
+        self.assertEqual(rows[0]["score_a_to_b"], 100.0)
+        self.assertIsNone(rows[0]["score_b_to_a"])
+
     def test_writes_pairs_file_and_does_not_call_hydrus(self):
         path = self._copy("dry.sqlite")
         result, d, client = _run_dry(path)
@@ -190,7 +227,7 @@ class TestDryRun(unittest.TestCase):
                         "file_a": "a" * 64,
                         "file_b": "b" * 64,
                         "score_a_to_b": 97.0,
-                        "score_b_to_a": 97.0,
+                        "score_b_to_a": None,
                     }
                 ],
             )

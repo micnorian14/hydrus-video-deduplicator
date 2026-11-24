@@ -25,7 +25,11 @@ if TYPE_CHECKING:
     from .typing_utils import ValueRange
 
 log = logging.getLogger(__name__)
+# Keep frame-level vpdqpy messages off the default console (historical).
 log.setLevel(logging.CRITICAL)
+# GPU fallback is a user-facing warning and must follow the app logging config
+# (--verbose on the CLI; the GUI's default INFO logging).
+_gpu_log = logging.getLogger("hydrusvideodeduplicator.vpdqpy")
 
 # The dimensions of the image after downscaling for pdq
 DOWNSCALE_DIMENSIONS = 512
@@ -312,7 +316,7 @@ class Vpdq:
                 return Vpdq._hash_video_bytes(video, num_threads, gpu_decode=True)
             except Exception as exc:
                 # Anything the GPU can't handle is retried with normal CPU decoding.
-                log.warning(f"GPU decode failed, falling back to CPU decode: {exc}")
+                _gpu_log.warning(f"GPU decode failed, falling back to CPU decode: {exc}")
         return Vpdq._hash_video_bytes(video, num_threads, gpu_decode=False)
 
     @staticmethod
