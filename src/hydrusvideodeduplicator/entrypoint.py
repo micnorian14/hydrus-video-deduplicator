@@ -41,7 +41,7 @@ from hydrusvideodeduplicator.dedup_util import (
     print_and_log,
     style_user_text,
 )
-from hydrusvideodeduplicator.process_priority import apply_process_priority
+from hydrusvideodeduplicator.process_priority import apply_process_priority, print_priority_info
 from dotenv import find_dotenv, load_dotenv
 
 import sys
@@ -315,6 +315,7 @@ def main(
             logger,
             f"Database filesize: {db_stats.file_size} bytes.",
         )
+        print_priority_info()
         # Read only. Each check is skipped when the flag that fixes it is given.
         check_database(db, check_orphans=not prune_orphans, check_tree=not (relink_search_tree or clear_search_tree))
         print_queue_waiting(db)
@@ -370,6 +371,7 @@ def main(
         with db.conn:
             db.create_tables()
         db_stats = DedupeDB.get_db_stats(db)
+        print_priority_info()
         print_search_cache_warning()
 
     deduper = HydrusVideoDeduplicator(
