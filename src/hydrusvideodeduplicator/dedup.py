@@ -24,7 +24,7 @@ import queue
 import sqlite3
 import threading
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 import hydrusvideodeduplicator.hydrus_api as hydrus_api
 import requests
@@ -558,27 +558,109 @@ def failed_hash_message(exc: BaseException) -> str:
     return str(exc)
 
 
+# How many bytes to read at a time from a Hydrus file download. Cancel (Ctrl+C or skip) is checked between
+# these chunks. 64 KiB is prompt enough to stop quickly and avoids a lot of tiny reads on a large video.
+DOWNLOAD_CHUNK_SIZE = 64 * 1024
+
+
+class DownloadCancelled(Exception):
+    """The file download was stopped because the user cancelled or skipped hashing."""
+
+
+def read_response_body(response, cancelled=None, chunk_size: int = DOWNLOAD_CHUNK_SIZE) -> bytes:
+    """Read a streamed Hydrus file response into bytes, stopping early if `cancelled()` is true.
+
+    Same result as `response.content` (requests already joins `iter_content` chunks). The temporary list of
+    chunks is the same kind of short-lived extra copy that `.content` already makes, so the RAM guard still
+    sees the file's real size once the download finishes.
+    """
+    chunks: list[bytes] = []
+    for chunk in response.iter_content(chunk_size=chunk_size):
+        if cancelled is not None and cancelled():
+            raise DownloadCancelled()
+        if chunk:
+            chunks.append(chunk)
+    return b"".join(chunks) or b""
+
+
 class FileHasher:
     """
     A class to fetch a file from Hydrus and phash it.
     """
 
-    def __init__(self, client: HVDClient, num_threads: int = 0, gpu_decode: bool = False):
+    def __init__(
+        self,
+        client: HVDClient,
+        num_threads: int = 0,
+        gpu_decode: bool = False,
+        cancel_event: threading.Event | None = None,
+        should_cancel_fn=None,
+    ):
         self.client = client
         self.num_threads = num_threads
         self.gpu_decode = gpu_decode
+        self.cancel_event = cancel_event if cancel_event is not None else threading.Event()
+        self.should_cancel_fn = should_cancel_fn
+        self._response_lock = threading.Lock()
+        self._active_response = None
+
+    def _cancelled(self) -> bool:
+        if self.cancel_event.is_set():
+            return True
+        return bool(self.should_cancel_fn and self.should_cancel_fn())
+
+    def cancel_downloads(self) -> None:
+        """Stop an in-flight or queued file download. Safe to call more than once, including from another thread."""
+        self.cancel_event.set()
+        with self._response_lock:
+            response = self._active_response
+        if response is not None:
+            try:
+                response.close()
+            except Exception:
+                pass
+
+    def _sleep_unless_cancelled(self, seconds: float) -> bool:
+        """Sleep, or return False early if the download was cancelled."""
+        end = time.monotonic() + seconds
+        while True:
+            if self._cancelled():
+                return False
+            remaining = end - time.monotonic()
+            if remaining <= 0:
+                return True
+            self.cancel_event.wait(min(remaining, 0.2))
 
     def _fetch_file(self, file_hash: str):
         response = None
         try:
+            if self._cancelled():
+                raise DownloadCancelled()
             response = self.client.client.get_file(hash_=file_hash)
-            return response.content
+            with self._response_lock:
+                self._active_response = response
+            if self._cancelled():
+                raise DownloadCancelled()
+            return read_response_body(response, self._cancelled)
+        except DownloadCancelled:
+            raise
         except (hydrus_api.HydrusAPIException, requests.RequestException) as exc:
+            if self._cancelled():
+                raise DownloadCancelled() from exc
             raise HydrusApiException(exc)
         except MemoryError as exc:
+            if self._cancelled():
+                raise DownloadCancelled() from exc
             # Too big for the free RAM: this file fails (failed page), the run goes on.
             raise FailedPerceptualHashException(failed_hash_message(exc))
+        except Exception:
+            if self._cancelled():
+                raise DownloadCancelled()
+            raise
         finally:
+            with self._response_lock:
+                if self._active_response is response:
+                    self._active_response = None
             if response is not None:
                 response.close()
 
@@ -607,12 +689,15 @@ class FileHasher:
         """
         try:
             return self._fetch_file(file_hash)
+        except DownloadCancelled:
+            raise
         except HydrusApiException as exc:
             # Add a delay before turning so that if there is some transient issue
             # the next file to be hashed won't also immediately error.
             # This is a hack. There should probably be some counter in the result generator
             # for the number of failures before hashing is stopped entirely.
-            time.sleep(3)
+            if not self._sleep_unless_cancelled(3):
+                raise DownloadCancelled()
             return exc
         except FailedPerceptualHashException as exc:
             return exc
@@ -959,7 +1044,12 @@ class HydrusVideoDeduplicator:
                     self._phash_videos_auto(list(video_hashes), FileHasher(self.client, self.job_count), stats, pbar)
                     gc.collect()
                     return stats
-                filehasher = FileHasher(self.client, self.job_count, self.gpu_decode)
+                filehasher = FileHasher(
+                    self.client,
+                    self.job_count,
+                    self.gpu_decode,
+                    should_cancel_fn=self.should_skip_step_fn,
+                )
                 # Download the next file from Hydrus in a background thread while the current file is hashed.
                 # Only one file is fetched ahead, and results are still processed and saved one at a time
                 # in the original order, so the database writes are exactly the same as before.
@@ -976,12 +1066,16 @@ class HydrusVideoDeduplicator:
                         if self.update_progress_callback:
                             self.update_progress_callback(HashingProgress(complete=pbar.n + 1, total=pbar.total))
                         if self.should_skip_step_fn and self.should_skip_step_fn():
+                            filehasher.cancel_downloads()
                             return stats
 
-                        if next_fetch is None:
-                            fetched = filehasher.fetch_file_or_error(video_hash)  # prefetch skipped: low RAM
-                        else:
-                            fetched = next_fetch.result()
+                        try:
+                            if next_fetch is None:
+                                fetched = filehasher.fetch_file_or_error(video_hash)  # prefetch skipped: low RAM
+                            else:
+                                fetched = self._await_prefetch(next_fetch, filehasher)
+                        except DownloadCancelled:
+                            return stats
                         next_fetch = None
                         if isinstance(fetched, (bytes, bytearray)):
                             largest_file = max(largest_file, len(fetched))
@@ -998,12 +1092,25 @@ class HydrusVideoDeduplicator:
                         if self.update_progress_callback:
                             self.update_progress_callback(HashingProgress(complete=pbar.n, total=pbar.total))
                 finally:
-                    # Don't wait on a pending download if hashing was stopped early.
+                    # Don't wait on a pending download if hashing was stopped early. Closing the in-flight
+                    # response unblocks a stream read so Python doesn't sit at exit finishing the next video.
+                    filehasher.cancel_downloads()
                     prefetcher.shutdown(wait=False, cancel_futures=True)
         except KeyboardInterrupt:
             raise CancelledPerceptualHashException(stats)
         gc.collect()
         return stats
+
+    def _await_prefetch(self, future, filehasher: FileHasher):
+        """Wait for a background download, and stop it promptly if the user skips hashing."""
+        while True:
+            if self.should_skip_step_fn and self.should_skip_step_fn():
+                filehasher.cancel_downloads()
+                raise DownloadCancelled()
+            try:
+                return future.result(timeout=0.2)
+            except FuturesTimeoutError:
+                continue
 
     def _save_phash_result(
         self, result: PerceptuallyHashedFile | FailedPerceptuallyHashedFile, stats: PerceptualHashingStats, pbar
@@ -1074,6 +1181,8 @@ class HydrusVideoDeduplicator:
         memory = {"videos": 0, "alone": 0, "largest": 0}  # videos waiting or being hashed; how many to hash alone
         fetch_done = threading.Event()
         stop = threading.Event()
+        filehasher.cancel_event = stop
+        filehasher.should_cancel_fn = self.should_skip_step_fn
         results: queue.Queue = queue.Queue()
         failure: list[BaseException] = []
 
@@ -1095,6 +1204,8 @@ class HydrusVideoDeduplicator:
                     if stop.is_set():
                         return
                     fetched = filehasher.fetch_file_or_error(file_hash)
+                    if stop.is_set():
+                        return
                     is_file = isinstance(fetched, (bytes, bytearray))  # not a download or out-of-memory error
                     info = probe_video_details(fetched) if profile is not None and is_file else None
                     if info is not None:
@@ -1113,6 +1224,8 @@ class HydrusVideoDeduplicator:
                         waiting.append((file_hash, fetched, wants_gpu, alone, info))
                         cond.notify_all()
                     del fetched
+            except DownloadCancelled:
+                return
             except BaseException as exc:
                 failure.append(exc)
             finally:
@@ -1217,6 +1330,7 @@ class HydrusVideoDeduplicator:
             raise
         finally:
             stop.set()
+            filehasher.cancel_downloads()
             with cond:
                 waiting.clear()
                 cond.notify_all()

@@ -50,6 +50,9 @@ class _Response:
     def __init__(self, content: bytes):
         self.content = content
 
+    def iter_content(self, chunk_size=1, decode_unicode=False):
+        yield self.content
+
     def close(self):
         pass
 

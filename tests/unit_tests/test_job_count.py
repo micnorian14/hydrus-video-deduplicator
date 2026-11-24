@@ -141,7 +141,7 @@ class TestMemoryErrorIsOneFailedFile(unittest.TestCase):
     def test_fetch_memory_error_becomes_failed_hash(self):
         client = mock.MagicMock()
         response = mock.MagicMock()
-        type(response).content = mock.PropertyMock(side_effect=MemoryError())
+        response.iter_content.side_effect = MemoryError()
         client.client.get_file.return_value = response
         hasher = dedup.FileHasher(client)
         result = hasher.fetch_file_or_error("a" * 64)
