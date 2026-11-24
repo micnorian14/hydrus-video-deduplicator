@@ -4,9 +4,14 @@ import os
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 from hydrusvideodeduplicator.db import DedupeDB, vptree
-from hydrusvideodeduplicator.db.fast_search import fast_search_enabled
+from hydrusvideodeduplicator.db.fast_search import (
+    fast_search_enabled,
+    fast_search_scan_error_warning,
+    reset_fast_search_fallback_warning,
+)
 
 from .test_fast_search import _make_hashes
 
@@ -36,6 +41,7 @@ def _search_all(db: DedupeDB.DedupeDb, mode: str, threshold: int) -> list:
 class TestFastSearchScan(unittest.TestCase):
     def setUp(self):
         vptree.TemporaryIntegerTableNameCache()  # fresh temp-table name cache for this test's own DB connection
+        reset_fast_search_fallback_warning()
 
     def _assert_identical(self, db: DedupeDB.DedupeDb):
         for threshold in THRESHOLDS:
@@ -149,6 +155,51 @@ class TestFastSearchScan(unittest.TestCase):
             db.create_tables()
             _add(db, [h for h in _make_hashes(seed=4) if h][:10])
             self.assertFalse(vptree.VpTreeManager(db).enable_fast_search_scan())
+            db.close()
+
+    def test_scan_disabled_by_env_prints_nothing(self):
+        old = os.environ.get("HVD_SCAN_SEARCH")
+        os.environ["HVD_SCAN_SEARCH"] = "0"
+        printed: list[str] = []
+        try:
+            with TemporaryDirectory() as tmpdir:
+                db = DedupeDB.DedupeDb(Path(tmpdir), "off-quiet.sqlite")
+                db.init_connection()
+                db.create_tables()
+                _add(db, [h for h in _make_hashes(seed=4) if h][:10])
+                tree = vptree.VpTreeManager(db)
+                self.assertTrue(tree.enable_fast_search_index())
+                with mock.patch(
+                    "hydrusvideodeduplicator.dedup_util.print_user",
+                    side_effect=lambda msg, **kwargs: printed.append(msg),
+                ):
+                    self.assertFalse(tree.enable_fast_search_scan())
+                self.assertEqual(printed, [])
+                db.close()
+        finally:
+            if old is None:
+                del os.environ["HVD_SCAN_SEARCH"]
+            else:
+                os.environ["HVD_SCAN_SEARCH"] = old
+
+    def test_scan_prepare_error_prints_warning_once(self):
+        with TemporaryDirectory() as tmpdir:
+            db = DedupeDB.DedupeDb(Path(tmpdir), "scan-err.sqlite")
+            db.init_connection()
+            db.create_tables()
+            _add(db, [h for h in _make_hashes(seed=4) if h][:10])
+            tree = vptree.VpTreeManager(db)
+            self.assertTrue(tree.enable_fast_search_index())
+            printed: list[str] = []
+            reset_fast_search_fallback_warning()
+            with mock.patch.object(db, "execute", side_effect=RuntimeError("scan prep failed")):
+                with mock.patch(
+                    "hydrusvideodeduplicator.dedup_util.print_user",
+                    side_effect=lambda msg, **kwargs: printed.append(msg),
+                ):
+                    self.assertFalse(tree.enable_fast_search_scan())
+                    self.assertFalse(tree.enable_fast_search_scan())
+            self.assertEqual(printed, [fast_search_scan_error_warning(RuntimeError("scan prep failed"))])
             db.close()
 
 

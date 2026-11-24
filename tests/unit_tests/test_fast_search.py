@@ -9,14 +9,22 @@ from tempfile import TemporaryDirectory
 
 from hydrusvideodeduplicator.db import DedupeDB, vptree
 from hydrusvideodeduplicator.db import fast_search as fast_search_mod
+from unittest import mock
+
 from hydrusvideodeduplicator.db.fast_search import (
     FRAME_BYTES,
+    HVD_FAST_SEARCH_MAX_GIB,
     SearchDistanceIndex,
     _BYTES_PER_FRAME,
     _OFFSETS_BYTES,
+    _GIB,
     _reachable_phash_ids,
     estimated_peak_bytes,
+    fast_search_build_error_warning,
+    fast_search_cap_warning,
     fast_search_enabled,
+    max_index_bytes,
+    reset_fast_search_fallback_warning,
 )
 
 
@@ -56,6 +64,7 @@ def _make_hashes(seed: int = 1234) -> list[bytes]:
 class TestFastSearch(unittest.TestCase):
     def setUp(self):
         vptree.TemporaryIntegerTableNameCache()  # fresh temp-table name cache for this test's own DB connection
+        reset_fast_search_fallback_warning()
 
     def test_distances_match_calculate_distance(self):
         hashes = [h for h in _make_hashes() if h]
@@ -267,6 +276,7 @@ class TestFastSearch(unittest.TestCase):
             self.assertEqual(peak, n * (_BYTES_PER_FRAME + 16) + _OFFSETS_BYTES)
 
             old_cap = fast_search_mod.MAX_INDEX_BYTES
+            old_env = os.environ.pop(HVD_FAST_SEARCH_MAX_GIB, None)
             try:
                 # Steady-state arrays fit, but the argsort scratch would exceed the cap.
                 fast_search_mod.MAX_INDEX_BYTES = (steady + peak) // 2
@@ -284,6 +294,108 @@ class TestFastSearch(unittest.TestCase):
                 self._assert_indexes_identical(rebuilt, index)
             finally:
                 fast_search_mod.MAX_INDEX_BYTES = old_cap
+                if old_env is None:
+                    os.environ.pop(HVD_FAST_SEARCH_MAX_GIB, None)
+                else:
+                    os.environ[HVD_FAST_SEARCH_MAX_GIB] = old_env
+            db.close()
+
+    def _capture_print_user(self):
+        printed: list[str] = []
+
+        def capture(msg, **kwargs):
+            printed.append(msg)
+
+        return printed, mock.patch("hydrusvideodeduplicator.dedup_util.print_user", side_effect=capture)
+
+    def test_max_index_bytes_env(self):
+        old_env = os.environ.pop(HVD_FAST_SEARCH_MAX_GIB, None)
+        old_cap = fast_search_mod.MAX_INDEX_BYTES
+        try:
+            self.assertEqual(max_index_bytes(), fast_search_mod.MAX_INDEX_BYTES)
+            os.environ[HVD_FAST_SEARCH_MAX_GIB] = "4"
+            self.assertEqual(max_index_bytes(), 4 * _GIB)
+            os.environ[HVD_FAST_SEARCH_MAX_GIB] = "2.5"
+            self.assertEqual(max_index_bytes(), int(2.5 * _GIB))
+            os.environ[HVD_FAST_SEARCH_MAX_GIB] = "0"
+            self.assertEqual(max_index_bytes(), fast_search_mod.MAX_INDEX_BYTES)
+            os.environ[HVD_FAST_SEARCH_MAX_GIB] = "nope"
+            self.assertEqual(max_index_bytes(), fast_search_mod.MAX_INDEX_BYTES)
+            fast_search_mod.MAX_INDEX_BYTES = 123
+            os.environ.pop(HVD_FAST_SEARCH_MAX_GIB)
+            self.assertEqual(max_index_bytes(), 123)
+        finally:
+            fast_search_mod.MAX_INDEX_BYTES = old_cap
+            if old_env is None:
+                os.environ.pop(HVD_FAST_SEARCH_MAX_GIB, None)
+            else:
+                os.environ[HVD_FAST_SEARCH_MAX_GIB] = old_env
+
+    def test_over_cap_prints_once_and_search_still_works(self):
+        hashes = [h for h in _make_hashes() if h]
+        with TemporaryDirectory() as tmpdir:
+            db = self._db_with_hashes(tmpdir, hashes)
+            index = SearchDistanceIndex.build(db)
+            self.assertIsNotNone(index)
+            peak = estimated_peak_bytes(index.num_frames)
+            hash_ids = [r[0] for r in db.execute("SELECT hash_id FROM shape_search_cache ORDER BY hash_id;")]
+            original = vptree.VpTreeManager(db)
+            expected = [original.search_file(h, max_hamming_distance=51) for h in hash_ids]
+
+            old_cap = fast_search_mod.MAX_INDEX_BYTES
+            old_env = os.environ.pop(HVD_FAST_SEARCH_MAX_GIB, None)
+            reset_fast_search_fallback_warning()
+            printed, patcher = self._capture_print_user()
+            try:
+                fast_search_mod.MAX_INDEX_BYTES = peak - 1
+                with patcher:
+                    tree = vptree.VpTreeManager(db)
+                    self.assertFalse(tree.enable_fast_search_index())
+                    self.assertFalse(tree.enable_fast_search_index())
+                self.assertEqual(printed, [fast_search_cap_warning(peak, peak - 1)])
+                got = [tree.search_file(h, max_hamming_distance=51) for h in hash_ids]
+                self.assertEqual(got, expected)
+            finally:
+                fast_search_mod.MAX_INDEX_BYTES = old_cap
+                if old_env is None:
+                    os.environ.pop(HVD_FAST_SEARCH_MAX_GIB, None)
+                else:
+                    os.environ[HVD_FAST_SEARCH_MAX_GIB] = old_env
+            db.close()
+
+    def test_disabled_by_env_prints_nothing(self):
+        hashes = [h for h in _make_hashes() if h]
+        with TemporaryDirectory() as tmpdir:
+            db = self._db_with_hashes(tmpdir, hashes)
+            old = os.environ.get("HVD_FAST_SEARCH")
+            reset_fast_search_fallback_warning()
+            printed, patcher = self._capture_print_user()
+            try:
+                os.environ["HVD_FAST_SEARCH"] = "0"
+                with patcher:
+                    self.assertIsNone(SearchDistanceIndex.build(db))
+                    tree = vptree.VpTreeManager(db)
+                    self.assertFalse(tree.enable_fast_search_index())
+                self.assertEqual(printed, [])
+            finally:
+                if old is None:
+                    os.environ.pop("HVD_FAST_SEARCH", None)
+                else:
+                    os.environ["HVD_FAST_SEARCH"] = old
+            db.close()
+
+    def test_build_error_prints_warning_once(self):
+        hashes = [h for h in _make_hashes() if h]
+        with TemporaryDirectory() as tmpdir:
+            db = self._db_with_hashes(tmpdir, hashes)
+            reset_fast_search_fallback_warning()
+            printed, patcher = self._capture_print_user()
+            with mock.patch.object(SearchDistanceIndex, "_allocate_arrays", side_effect=MemoryError("out of memory")):
+                with patcher:
+                    self.assertIsNone(SearchDistanceIndex.build(db))
+                    self.assertIsNone(SearchDistanceIndex.build(db))
+            self.assertEqual(len(printed), 1)
+            self.assertEqual(printed[0], fast_search_build_error_warning(MemoryError("out of memory")))
             db.close()
 
 

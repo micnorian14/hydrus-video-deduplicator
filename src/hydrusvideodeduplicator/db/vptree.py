@@ -648,6 +648,12 @@ class VpTreeManager:
             self._search_scan_hash_phash = hash_phash
         except Exception as exc:  # never let the speedup break a run
             log.warning(f"Could not prepare the fast search scan, using the original search: {exc!r}")
+            from hydrusvideodeduplicator.db.fast_search import (
+                fast_search_scan_error_warning,
+                warn_fast_search_fallback,
+            )
+
+            warn_fast_search_fallback(fast_search_scan_error_warning(exc))
             self._search_scan_nodes = None
             self._search_scan_hash_phash = None
             return False

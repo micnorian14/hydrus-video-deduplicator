@@ -157,7 +157,8 @@ or in a Linux/macOS shell run `HVD_PIPELINE=0 python -m hydrusvideodeduplicator 
 
 | Switch | Default | What it does | What `0` restores |
 |---|---|---|---|
-| `HVD_FAST_SEARCH` | `1` (on) | Exact in-memory distance index for "Finding potential duplicates". Falls back automatically if it can't be used. | Original distance calculation (also turns off `HVD_SCAN_SEARCH`). |
+| `HVD_FAST_SEARCH` | `1` (on) | Exact in-memory distance index for "Finding potential duplicates". Falls back automatically if it can't be used, and prints a warning unless you set this to `0`. | Original distance calculation (also turns off `HVD_SCAN_SEARCH`). |
+| `HVD_FAST_SEARCH_MAX_GIB` | 2.5 GB | Maximum RAM for that index. If the index would need more, the tool falls back to the original (slower) search and prints a warning. Example: `HVD_FAST_SEARCH_MAX_GIB=4`. | — |
 | `HVD_SCAN_SEARCH` | `1` (on) | Skips the part of the search tree walk that is the same for every file. | Original tree walk. |
 | `HVD_PIPELINE` | `1` (on) | Searches the next files while Hydrus handles the current file's pairs (same calls, same order). | Original one-file-at-a-time loop. |
 | `HVD_FAST_INSERT` | `1` (on) | Faster "Building search tree", identical tree. | Original tree inserts. |

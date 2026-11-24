@@ -36,7 +36,8 @@ Memory: about 100 bytes per indexed frame (the frames themselves plus 16 int32 l
 the block-value offsets. Construction never holds a second full-size copy of the frames: they are written
 straight into the index, and the lookup tables are built from zero-copy views of those words. Peak construction
 memory is about 116 bytes per frame plus ~8 MB (the extra is a temporary argsort buffer). The index is refused
-if that peak would exceed MAX_INDEX_BYTES. Only nodes reachable from the tree root are indexed, because the
+if that peak would exceed MAX_INDEX_BYTES (2.5 GB by default; override with
+HVD_FAST_SEARCH_MAX_GIB). Only nodes reachable from the tree root are indexed, because the
 search can never visit any other node. The index is read-only, lives only for the duration of the search phase,
 and never touches the database except for reading.
 
@@ -46,6 +47,7 @@ Disable with the environment variable HVD_FAST_SEARCH=0 to get the original beha
 from __future__ import annotations
 
 import logging
+import math
 import os
 import time
 from typing import TYPE_CHECKING
@@ -67,7 +69,11 @@ FRAME_BYTES = 32  # one PDQ hash = 256 bits
 _BLOCKS = 16  # 16 blocks of 16 bits; pigeonhole is valid because 16 * 2 = 32 > MATCH_TOLERANCE - 1 = 30
 
 # Refuse to build an index whose *peak construction* memory would exceed this. The search then uses the original code.
+# Override with HVD_FAST_SEARCH_MAX_GIB (GiB, e.g. HVD_FAST_SEARCH_MAX_GIB=4). See max_index_bytes().
 MAX_INDEX_BYTES = 2_500_000_000
+HVD_FAST_SEARCH_MAX_GIB = "HVD_FAST_SEARCH_MAX_GIB"
+_GIB = 1024**3
+_fast_search_fallback_warned = False
 _BYTES_PER_FRAME = FRAME_BYTES + 4 * _BLOCKS + 4  # frames + 16 int32 sorted-position tables + frame->node table
 _OFFSETS_LEN = 65537
 _OFFSETS_BYTES = _BLOCKS * _OFFSETS_LEN * 8  # 16 int64 offset tables, ~8.4 MB
@@ -85,6 +91,77 @@ _MAX_PENDING_HITS = 1 << 22  # matched (frame, node) entries held before they ar
 def estimated_peak_bytes(total_frames: int) -> int:
     """Peak RAM during index construction: steady-state arrays + argsort scratch + fixed offset tables."""
     return total_frames * _PEAK_BYTES_PER_FRAME + _OFFSETS_BYTES
+
+
+def max_index_bytes() -> int:
+    """Peak construction RAM allowed for the fast search index, in bytes."""
+    raw = os.environ.get(HVD_FAST_SEARCH_MAX_GIB, "").strip()
+    if raw:
+        try:
+            gib = float(raw)
+            if gib > 0:
+                return int(gib * _GIB)
+        except ValueError:
+            pass
+    return MAX_INDEX_BYTES
+
+
+def format_index_gb(num_bytes: int) -> str:
+    """User-facing size, in decimal GB (the default cap is 2.5 GB)."""
+    text = f"{num_bytes / 1_000_000_000:.1f}"
+    if text.endswith(".0"):
+        text = text[:-2]
+    return f"{text} GB"
+
+
+def suggested_max_gib(needed_bytes: int) -> int:
+    """A HVD_FAST_SEARCH_MAX_GIB value large enough for needed_bytes."""
+    return max(math.ceil(needed_bytes / _GIB), 1)
+
+
+def fast_search_cap_warning(needed_bytes: int, cap_bytes: int) -> str:
+    needed = format_index_gb(needed_bytes)
+    cap = format_index_gb(cap_bytes)
+    suggested = suggested_max_gib(needed_bytes)
+    return (
+        f"WARNING: Fast search is off: the index would need {needed}, over the {cap} cap. "
+        f"Searches will be slower. Set {HVD_FAST_SEARCH_MAX_GIB}={suggested} to raise the cap."
+    )
+
+
+def fast_search_build_error_warning(exc: BaseException) -> str:
+    return f"WARNING: Fast search is off: the index could not be built ({exc}). Searches will be slower."
+
+
+def fast_search_numpy_warning() -> str:
+    return "WARNING: Fast search is off: NumPy with bitwise_count is not available. Searches will be slower."
+
+
+def fast_search_scan_error_warning(exc: BaseException) -> str:
+    return f"WARNING: Fast search scan is off: it could not be prepared ({exc}). Searches will be slower."
+
+
+def reset_fast_search_fallback_warning() -> None:
+    """Allow the fallback warning to be printed again (for tests)."""
+    global _fast_search_fallback_warned
+    _fast_search_fallback_warned = False
+
+
+def warn_fast_search_fallback(message: str) -> None:
+    """Print one user-visible fallback warning per process. Logging is left to the caller."""
+    global _fast_search_fallback_warned
+    if _fast_search_fallback_warned:
+        return
+    _fast_search_fallback_warned = True
+    try:
+        from hydrusvideodeduplicator.dedup_util import print_user
+
+        print_user(message, highlight=False)
+    except Exception:
+        try:
+            print(message)
+        except Exception:
+            pass
 
 
 def fast_search_enabled() -> bool:
@@ -208,6 +285,9 @@ class SearchDistanceIndex:
     def build(cls, db: DedupeDB.DedupeDb) -> SearchDistanceIndex | None:
         """Build the index, or return None (=> use the original code) if it can't or shouldn't be built."""
         if not fast_search_enabled():
+            if os.environ.get("HVD_FAST_SEARCH", "1").strip() != "0":
+                log.warning("Fast search requires NumPy with bitwise_count; using the original search code.")
+                warn_fast_search_fallback(fast_search_numpy_warning())
             return None
         try:
             start = time.perf_counter()
@@ -218,6 +298,8 @@ class SearchDistanceIndex:
             phash_ids: list[int] = []
             frame_counts: list[int] = []
             total_frames = 0
+            cap = max_index_bytes()
+            over_cap = False
             for phash_id, typ, length in db.execute(
                 "SELECT phash_id, typeof(phash), length(phash) FROM shape_perceptual_hashes;"
             ):
@@ -226,12 +308,18 @@ class SearchDistanceIndex:
                 if typ != "blob" or length is None or length <= 0 or length % FRAME_BYTES:
                     continue
                 k = length // FRAME_BYTES
+                total_frames += k
+                if over_cap:
+                    continue
                 phash_ids.append(int(phash_id))
                 frame_counts.append(k)
-                total_frames += k
-                if estimated_peak_bytes(total_frames) > MAX_INDEX_BYTES:
-                    log.warning("Fast search index would be too large; using the original search code.")
-                    return None
+                if estimated_peak_bytes(total_frames) > cap:
+                    over_cap = True
+            if over_cap:
+                needed = estimated_peak_bytes(total_frames)
+                log.warning("Fast search index would be too large; using the original search code.")
+                warn_fast_search_fallback(fast_search_cap_warning(needed, cap))
+                return None
             if not phash_ids:
                 return None
             expected = {pid: k for pid, k in zip(phash_ids, frame_counts)}
@@ -258,6 +346,7 @@ class SearchDistanceIndex:
             return index
         except Exception as exc:  # includes MemoryError: never let the speedup break a run
             log.warning(f"Could not build fast search index, using the original search code: {exc!r}")
+            warn_fast_search_fallback(fast_search_build_error_warning(exc))
             return None
 
     def distances_for(self, query: bytes) -> list[int] | None:
